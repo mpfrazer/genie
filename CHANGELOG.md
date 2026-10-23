@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/mpfrazer/genie/compare/v0.6.0...v0.7.0) (2026-10-23)
+
+
+### Features
+
+* seal run state, chain the log, and require typed commands for approvals ([#20](https://github.com/mpfrazer/genie/issues/20)) ([645d879](https://github.com/mpfrazer/genie/commit/645d8794c40d5a115f8c0185e643f852a56499c8))
+
 ## [0.6.0](https://github.com/mpfrazer/genie/compare/v0.5.0...v0.6.0) (2026-10-23)
 
 
