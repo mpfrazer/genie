@@ -1,7 +1,7 @@
 // Best-effort repo inspection for `genie init`. Everything here is a suggestion written into
 // config.yaml for the user to review, never a silent runtime assumption.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config/types.ts';
 
@@ -10,6 +10,24 @@ export interface Detected {
   provider: Config['forge']['provider'];
   baseBranch: string;
   ecosystem?: string;
+  /** Command for the pr.ready gate, when the repo has CI the forge can report on. */
+  ciCommand?: string;
+}
+
+/**
+ * Waits for CI on the current branch's PR, then watches it to completion.
+ * `gh pr checks` exits 1 with "no checks reported" until the forge registers the workflow runs,
+ * which can lag a fresh push by several seconds, so poll for up to two minutes first.
+ */
+export const GITHUB_CI_COMMAND = [
+  '# Wait up to 2 minutes for CI to register on the PR, then watch it to completion.',
+  'for i in $(seq 24); do gh pr checks 2>&1 | grep -q "no checks reported" || break; sleep 5; done',
+  'gh pr checks --watch --interval 15',
+].join('\n');
+
+function hasGithubWorkflows(root: string): boolean {
+  const dir = join(root, '.github', 'workflows');
+  return existsSync(dir) && readdirSync(dir).some((f) => /\.ya?ml$/.test(f));
 }
 
 function git(root: string, args: string[]): string | undefined {
@@ -67,5 +85,6 @@ export function detect(root: string): Detected {
   const originHead = git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])?.replace(/^origin\//, '');
   const baseBranch = originHead ?? git(root, ['symbolic-ref', '--short', 'HEAD']) ?? 'main';
 
-  return { commands, provider, baseBranch, ecosystem };
+  const ciCommand = provider === 'github' && hasGithubWorkflows(root) ? GITHUB_CI_COMMAND : undefined;
+  return { commands, provider, baseBranch, ecosystem, ciCommand };
 }
