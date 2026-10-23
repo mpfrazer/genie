@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/mpfrazer/genie/compare/v0.5.0...v0.6.0) (2026-10-23)
+
+
+### Features
+
+* enforce run budgets and have an agent review the plan in orchestrated mode ([#18](https://github.com/mpfrazer/genie/issues/18)) ([d040605](https://github.com/mpfrazer/genie/commit/d0406054f4252cd9497369a6dffa9ea5e80c6991))
+
 ## [0.5.0](https://github.com/mpfrazer/genie/compare/v0.4.0...v0.5.0) (2026-10-23)
 
 
