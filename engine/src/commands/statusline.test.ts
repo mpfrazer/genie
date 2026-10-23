@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { describeStatusline } from '../format.ts';
+import { newRunState } from '../state.ts';
 
 const CLI = fileURLToPath(new URL('../cli.ts', import.meta.url));
 
@@ -73,5 +75,18 @@ describe('genie statusline', () => {
     genie(root, ['new', 'Short']);
     writeFileSync(join(root, '.genie/config.yaml'), 'gates:\n  nope: {}\n');
     assert.deepEqual(line(root), { stdout: '', status: 0 });
+  });
+});
+
+describe('describeStatusline', () => {
+  it('names the slice and passes --slice to approve for slice gates', () => {
+    const state = newRunState({ id: 'r1', title: 'Short', mode: 'guided', branch: 'genie/r1', base: 'main' }, '2026-01-01T00:00:00Z');
+    state.stage = 'implement';
+    state.stages.implement.phase = 'exit';
+    const slice = { id: 'S2', title: 'Two', goal: 'g', covers: [], tests: [], depends_on: [] };
+    assert.equal(
+      describeStatusline(state, { type: 'await_human', gate: 'slice.reviewed', reason: 'r', slice }),
+      'genie Short ▸ implement/exit S2 · ⏸ /genie:approve slice.reviewed --slice S2',
+    );
   });
 });
