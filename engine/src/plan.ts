@@ -91,17 +91,52 @@ export function planProblems(plan: unknown, specText: string): string[] {
   return problems;
 }
 
+const PROSE_FIELDS = new Set(['title', 'goal', 'tests']);
+
+/**
+ * Prose values that a `#` cut short. In YAML, ` #` starts a comment even mid-sentence, so
+ * `goal: add ## Usage docs` parses as "add". Comments are fine elsewhere (the example plan
+ * annotates ids), but on a title, goal, or test they're almost always lost text.
+ */
+export function truncatedProse(text: string): string[] {
+  const doc = YAML.parseDocument(text);
+  const slices = doc.get('slices');
+  if (!YAML.isSeq(slices)) return [];
+  const problems: string[] = [];
+  const cut = (node: unknown): boolean => {
+    if (!YAML.isScalar(node) || !node.range || typeof node.value !== 'string') return false;
+    const [, end] = node.range;
+    const lineEnd = text.indexOf('\n', end);
+    return text.slice(end, lineEnd === -1 ? undefined : lineEnd).trimStart().startsWith('#');
+  };
+  slices.items.forEach((slice, i) => {
+    if (!YAML.isMap(slice)) return;
+    for (const pair of slice.items) {
+      const key = YAML.isScalar(pair.key) ? String(pair.key.value) : '';
+      if (!PROSE_FIELDS.has(key)) continue;
+      const values = YAML.isSeq(pair.value) ? pair.value.items.map((v, j) => [`/${j}`, v] as const) : [['', pair.value] as const];
+      for (const [where, node] of values) {
+        if (cut(node)) {
+          problems.push(`/slices/${i}/${key}${where}: a "#" starts a YAML comment here, cutting the text short; quote the value`);
+        }
+      }
+    }
+  });
+  return problems;
+}
+
 /** Reads and validates plan.yaml, throwing one error that lists every problem. */
 export function loadPlan(planPath: string, specPath: string): Plan {
   if (!existsSync(planPath)) throw new GenieError(`stage decompose requires plan.yaml in the run directory`);
+  const text = readFileSync(planPath, 'utf8');
   let parsed: unknown;
   try {
-    parsed = YAML.parse(readFileSync(planPath, 'utf8'));
+    parsed = YAML.parse(text);
   } catch (err) {
     throw new GenieError(`plan.yaml: invalid YAML: ${(err as Error).message}`);
   }
   const spec = existsSync(specPath) ? readFileSync(specPath, 'utf8') : '';
-  const problems = planProblems(parsed, spec);
+  const problems = [...truncatedProse(text), ...planProblems(parsed, spec)];
   if (problems.length > 0) {
     throw new GenieError(`plan.yaml is invalid:\n${problems.map((p) => `  ${p}`).join('\n')}`);
   }

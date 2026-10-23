@@ -2,11 +2,12 @@ import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { GenieError } from '../errors.ts';
 import { runChecks, type CheckResult } from '../checks.ts';
-import { currentGate, nextAction, recordVerdict, resolveVerdictSlice } from '../engine.ts';
+import { currentGate, gateConfig, nextAction, recordVerdict, resolveVerdictSlice } from '../engine.ts';
 import { GATES, isSliceGate, type GateName } from '../pipeline.ts';
 import type { Config } from '../config/types.ts';
 import { findSlice, type GateState, type RunState, type Verdict } from '../state.ts';
 import { runDir } from '../store.ts';
+import { extendBudget } from '../budget.ts';
 import { mutateRun, type Session } from '../session.ts';
 import { settle } from '../orchestrate.ts';
 import type { RunView } from './run.ts';
@@ -51,17 +52,18 @@ export function runGate(
 ): RunView & { results: CheckResult[]; verdict: Verdict } {
   const gate = parseGate(gateName);
   const config = session.config;
-  if (config.gates[gate].kind !== 'automated') {
-    throw new GenieError(`gate ${gate} is a ${config.gates[gate].kind} gate; --run only evaluates automated gates`);
-  }
   // Settle any config-driven transitions first, then fail fast before spending time on checks
   // for a gate that isn't up.
   const { state: before } = mutateRun(session, id, () => undefined);
+  const gc = gateConfig(before, config, gate);
+  if (gc.kind !== 'automated') {
+    throw new GenieError(`gate ${gate} is a ${gc.kind} gate${before.mode === 'orchestrated' ? ' in orchestrated mode' : ''}; --run only evaluates automated gates`);
+  }
   const t = target(before, config, gate, slice);
 
   // A slice with its own worktree is checked there; everything else in the main checkout.
   const cwd = (t.slice && findSlice(before, t.slice)?.worktree?.path) || session.root;
-  const outcome = runChecks(cwd, config, config.gates[gate].checks ?? [], evidenceDir(session, before.id), evidencePrefix(gate, t));
+  const outcome = runChecks(cwd, config, gc.checks ?? [], evidenceDir(session, before.id), evidencePrefix(gate, t));
   const evidence = outcome.results.flatMap((r) => (r.log ? [r.log] : []));
   const { state: recorded } = mutateRun(session, before.id, (s, ctx) =>
     recordVerdict(
@@ -124,10 +126,19 @@ export function agentVerdict(session: Session, opts: AgentVerdictOptions): RunVi
  * (the /genie:approve command); hooks block the model from calling it through Bash.
  */
 export function approve(session: Session, gateName: string, reject: boolean, note?: string, id?: string, slice?: string): RunView {
+  if (gateName === 'budget') return approveBudget(session, reject, note, id, slice);
   const gate = parseGate(gateName);
   const { state } = mutateRun(session, id, (s, ctx) =>
     recordVerdict(s, session.config, { gate, slice, verdict: reject ? 'fail' : 'pass', source: 'human', by: 'human', note }, ctx),
   );
+  return runView(session, settle(session, state));
+}
+
+/** `approve budget`: a human lets a run that went over budget carry on. */
+function approveBudget(session: Session, reject: boolean, note?: string, id?: string, slice?: string): RunView {
+  if (reject) throw new GenieError('to stop a run that is over budget, abort it (/genie:abort)');
+  if (slice) throw new GenieError('the budget belongs to the run; --slice does not apply');
+  const { state } = mutateRun(session, id, (s, ctx) => extendBudget(s, session.config, note, ctx));
   return runView(session, settle(session, state));
 }
 

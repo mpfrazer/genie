@@ -29,7 +29,7 @@ Usage: genie <command> [options]
   gate <gate> --run [--slice <id>]       Evaluate an automated gate
   gate <gate> --verdict pass|fail|needs_human --by <agent> [--slice <id>] --findings <file> [--note <text>]
                                          Record an agent gate verdict
-  approve <gate> [--reject] [--slice <id>] [--note <text>]
+  approve <gate>|budget [--reject] [--slice <id>] [--note <text>]
                                          Record a human decision (human-only channel)
 
   --slice names the plan slice for slice gates (slice.verified, slice.reviewed) and implement work;

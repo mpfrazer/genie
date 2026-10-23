@@ -35,7 +35,8 @@ export function defaultConfig(): Config {
     },
     gates: {
       'spec.approved': human(),
-      'plan.approved': human(),
+      // Guided runs have a human at hand to approve the plan; orchestrated runs have an agent check it.
+      'plan.approved': { ...human(), orchestrated: { kind: 'agent', evaluator: 'plan-reviewer', retries: 2 } },
       'slice.verified': automated(VERIFY_CHECKS, 3),
       'slice.reviewed': agent('adversarial-reviewer', 3),
       'integration.verified': automated(VERIFY_CHECKS, 2),

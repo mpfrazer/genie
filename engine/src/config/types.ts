@@ -19,6 +19,8 @@ export interface GateConfig {
   /** Automatic fix → re-evaluate loops before escalating. */
   retries: number;
   escalate_to: 'human' | 'halt';
+  /** Overrides that apply while the run is in orchestrated mode (e.g. an agent decides instead of a human). */
+  orchestrated?: Partial<Omit<GateConfig, 'orchestrated'>>;
 }
 
 export interface Config {
@@ -56,9 +58,13 @@ export interface Config {
     /** Whether outward actions are allowed when no run is active. */
     outside_run: 'allow' | 'deny';
   };
+  /** Orchestrated-mode safety rails. Exceeding one pauses the run for a human (§7). */
   budgets: {
+    /** Rounds of work a slice may take before a failed gate escalates instead of reworking. */
     max_iterations_per_slice: number;
+    /** Time the run may spend orchestrated and not waiting on a human, e.g. `4h`. */
     max_run_duration: string;
+    /** Cost the run's orchestrated sessions may spend, as reported to the status line. */
     max_cost_usd: number;
   };
 }

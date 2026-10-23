@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { GenieError } from './errors.ts';
 import { advance, type Ctx } from './engine.ts';
+import { chargeTime, checkBudget } from './budget.ts';
 import { loadConfig, repoConfigPath } from './config/load.ts';
 import type { Config, ConfigLayer } from './config/types.ts';
 import type { RunState } from './state.ts';
@@ -28,7 +29,12 @@ export function openSession(cwd: string, flags?: ConfigLayer): Session {
  * concurrent genie processes serialize. The state is saved before the log is appended, so the log
  * never records a transition that didn't stick.
  */
-export function mutateRun<T>(session: Session, runId: string | undefined, fn: (state: RunState, ctx: Ctx) => T): {
+export function mutateRun<T>(
+  session: Session,
+  runId: string | undefined,
+  fn: (state: RunState, ctx: Ctx) => T,
+  opts: { lockTimeoutMs?: number } = {},
+): {
   state: RunState;
   result: T;
 } {
@@ -39,9 +45,12 @@ export function mutateRun<T>(session: Session, runId: string | undefined, fn: (s
     const ctx: Ctx = { now: session.now(), events: [] };
     // Pick up config changes (e.g. a gate disabled mid-run) before acting.
     advance(state, session.config, ctx);
+    // Time since the last mutation is charged to the state the run was in during it.
+    chargeTime(state, session.config, ctx);
     const result = fn(state, ctx);
+    checkBudget(state, session.config, ctx);
     saveRun(session.root, state);
     appendLog(session.root, state.id, ctx.events);
     return { state, result };
-  });
+  }, { timeoutMs: opts.lockTimeoutMs });
 }
