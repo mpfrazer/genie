@@ -43,7 +43,7 @@ export function init(opts: InitOptions): InitResult {
     forge: {
       provider: found.provider,
       base_branch: found.baseBranch,
-      ...(found.provider === 'github' ? { ci_command: 'gh pr checks --watch --interval 15' } : {}),
+      ...(found.ciCommand ? { ci_command: found.ciCommand } : {}),
     },
   };
 
@@ -57,6 +57,9 @@ export function init(opts: InitOptions): InitResult {
     notes.push('no build/test commands detected: fill in `commands` so verification gates can run');
   }
   if (found.provider === 'none') notes.push('no GitHub/GitLab remote found: forge.provider set to none');
+  if (found.provider !== 'none' && !found.ciCommand) {
+    notes.push('no CI workflows detected: set forge.ci_command so pr.ready can wait for CI (until then a human decides it)');
+  }
 
   checkLayer(layer, 'generated config');
   const presets = resolveConfig(profile, [{ stages: { deploy: { enabled: false } } }]);
@@ -66,7 +69,8 @@ export function init(opts: InitOptions): InitResult {
     '# Override any gate under `gates:`, e.g.  gates: { intent.reviewed: { enabled: false } }',
     '',
   ].join('\n');
-  writeAtomic(path, header + YAML.stringify(layer));
+  // Literal blocks keep multi-line commands (like forge.ci_command) readable and editable as written.
+  writeAtomic(path, header + YAML.stringify(layer, { blockQuote: 'literal', lineWidth: 0 }));
   writeAtomic(join(genieDir(root), '.gitignore'), 'runs/\nworktrees/\n');
 
   return { root, path, profile, ecosystem: found.ecosystem, layer, notes };

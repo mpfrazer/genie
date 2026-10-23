@@ -361,9 +361,19 @@ How it works:
 - **Where the driver stops.** At a human gate, after a gate failure (with a summary of why), when the stage it started on passes (in implement: when the slice it started on passes), or on an error.
 - **Slices.** The implementer and adversarial reviewer each work on one slice per invocation, with the slice in their prompt. Implementer commits carry a `Genie-Slice: <id>` trailer, so reviewers can isolate the slice's commits on the shared run branch.
 - **Run branches.** Each run records `branch` (`forge.branch_prefix` + run id) and `base`. `genie done` refuses `implement` and `integrate` unless the work is committed on the run branch, ahead of the base.
-- **CI gate.** `pr.ready` runs `forge.ci_command`. `genie init` sets it to `gh pr checks --watch --interval 15` for GitHub repos.
+- **CI gate.** `pr.ready` runs `forge.ci_command`. For GitHub repos that have workflow files, `genie init` sets a command that first waits up to 2 minutes for checks to register, then runs `gh pr checks --watch`. Right after a push, `gh pr checks` reports "no checks reported" (exit 1) until the forge registers the workflow runs, so watching immediately would fail fresh PRs. Without workflows, `ci_command` stays unset and `pr.ready` goes to a human.
 
-Verified end to end on 2026-10-22: six separate headless Claude Code sessions took a scratch repo from intent through spec, plan, implementation, verification, adversarial review, and integration. State resumed from disk each time, and the audit log attributed each step correctly.
+Verified end to end on 2026-10-22:
+- **Local scratch repo.** Six separate headless Claude Code sessions took it from intent through spec, plan, implementation, verification, adversarial review, and integration. State resumed from disk each time.
+- **Real GitHub repo** (private `mpfrazer/genie-sandbox`, squash-only, with Actions CI). Ten sessions took a run through every enabled stage to `done`:
+  - spec → plan → implementer → `slice.verified` → adversarial review → integrate (fetch and merge `origin/main`)
+  - pr: push, then `gh pr create` with a conventional title and `pr-body.md` as the body
+  - `pr.ready`: watched CI from pending to pass
+  - `pr.approved` via `/genie:approve`
+  - merge: squash, the only allowed method; branch deleted; local `main` fast-forwarded
+  - `build.passed` on `main` at the merge commit
+- **Attribution.** The audit log credited `claude`, `human`, `implementer`, `adversarial-reviewer`, and `genie` correctly in both runs.
+- **Hook gating against real run state.** `git push` of the run branch is denied until the `pr` stage. `gh pr merge` is denied until `pr.approved` passes, including at the merge stage while the approval is pending.
 
 ### Orchestrated
 `/genie:run` loops: ask engine for ready work → dispatch subagents (up to `max_parallel_slices`) → evaluate gates → route failures back with findings → repeat. It halts on:

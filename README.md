@@ -6,7 +6,7 @@ genie gives every repo the same gated lifecycle, run either step by step (guided
 See [docs/SPEC.md](docs/SPEC.md) for the design.
 
 ## Status
-Guided mode works from intent through integration (verified live). The PR, merge, deploy, and release stages are implemented but not yet exercised against a real repo. Start with `/genie:init`, then `/genie:new "<intent>"`. Each `/genie:next` advances one stage; approve human gates with `/genie:approve <gate>`. Subagents implement the plan (`implementer`) and review it (`adversarial-reviewer`, `intent-reviewer`). A PreToolUse hook enforces the gates. Orchestrated mode (parallel slices, autonomous looping) is next.
+Guided mode works end to end, verified live on a real GitHub repo: intent → spec → plan → implement → verify → adversarial review → integrate → PR → CI → approval → squash merge → build. The deploy and release stages are implemented but not yet exercised against a real repo. Start with `/genie:init`, then `/genie:new "<intent>"`. Each `/genie:next` advances one stage; approve human gates with `/genie:approve <gate>`. Subagents implement the plan (`implementer`) and review it (`adversarial-reviewer`, `intent-reviewer`). A PreToolUse hook enforces the gates. Orchestrated mode (parallel slices, autonomous looping) is next.
 
 ## Development
 ```sh
