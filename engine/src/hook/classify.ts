@@ -9,6 +9,7 @@ export type ProtectedAction =
   | { kind: 'deploy'; detail: string }
   | { kind: 'release'; detail: string }
   | { kind: 'approve'; detail: string }
+  | { kind: 'abort'; detail: string }
   | { kind: 'record'; detail: string; subcommand: 'gate' | 'done'; by?: string }
   | { kind: 'state_write'; detail: string; path: string }
   | { kind: 'config_write'; detail: string; path: string };
@@ -172,6 +173,7 @@ export function classify(raw: Argv, config: Config | undefined): ProtectedAction
   if (genieArgs) {
     const sub = geniePositionals(genieArgs)[0];
     if (sub === 'approve') actions.push({ kind: 'approve', detail });
+    if (sub === 'abort') actions.push({ kind: 'abort', detail });
     if (sub === 'gate' && genieArgs.some((a) => a === '--verdict' || a.startsWith('--verdict='))) {
       actions.push({ kind: 'record', detail, subcommand: 'gate', by: flagValue(genieArgs, '--by') });
     }

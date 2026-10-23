@@ -1,0 +1,16 @@
+{
+  "name": "genie",
+  "owner": {
+    "name": "Mike Frazer"
+  },
+  "metadata": {
+    "description": "genie: a gated, guided-or-orchestrated development lifecycle for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "genie",
+      "source": "./",
+      "description": "A consistent, gated development lifecycle for every repo: guided or fully orchestrated, from spec to release."
+    }
+  ]
+}

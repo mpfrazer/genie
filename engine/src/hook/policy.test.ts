@@ -74,6 +74,13 @@ describe('invariants (always on)', () => {
     }
   });
 
+  it('denies the model aborting a run', () => {
+    for (const cmd of ['genie abort', 'genie abort --note "stuck"', `sh -c 'node /p/engine/dist/genie.mjs --run-id r1 abort'`]) {
+      assert.equal(check(cmd)?.decision, 'deny', cmd);
+    }
+    assert.match(check('genie abort')?.reason ?? '', /\/genie:abort/);
+  });
+
   it('denies writes to engine-owned run state, but not stage artifacts', () => {
     assert.equal(check('echo {} > .genie/runs/r1/state.json')?.decision, 'deny');
     assert.equal(check('sed -i s/pending/pass/ .genie/runs/r1/state.json')?.decision, 'deny');
