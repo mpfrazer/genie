@@ -21,3 +21,12 @@ To try the plugin locally:
 ```sh
 claude --plugin-dir /path/to/genie
 ```
+
+## Versioning and releases
+genie uses [Semantic Versioning](https://semver.org), driven by [Conventional Commits](https://www.conventionalcommits.org) and [release-please](https://github.com/googleapis/release-please):
+
+1. Land changes on `main` through squash-merged PRs. CI requires the PR title to be a conventional commit (`feat: …`, `fix(engine): …`, `feat!: …` for breaking changes).
+2. On every push to `main`, release-please updates an open **release PR**. That PR bumps the version in every manifest and adds the new entries to `CHANGELOG.md`.
+3. Merging the release PR tags `vX.Y.Z` and publishes a GitHub release.
+
+Before 1.0, `feat` bumps the minor version and `fix` bumps the patch version. The version of record is `.claude-plugin/plugin.json` (`genie --version` reads it). `scripts/check-versions.mjs` fails CI if any version field drifts from it.

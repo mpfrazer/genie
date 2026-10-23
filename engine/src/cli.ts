@@ -28,7 +28,13 @@ Usage: genie <command> [options]
                                          Record a human decision (human-only channel)
   abort [--note <text>]                  Abort the run
 
-Global: --json  machine-readable output    --run-id <id>  target a specific run`;
+Global: --json  machine-readable output    --run-id <id>  target a specific run    --version`;
+
+/** The plugin manifest is the version of record; it sits two levels up from both src/ and dist/. */
+function version(): string {
+  const manifest = new URL('../../.claude-plugin/plugin.json', import.meta.url);
+  return (JSON.parse(readFileSync(manifest, 'utf8')) as { version: string }).version;
+}
 
 const OPTIONS = {
   json: { type: 'boolean' },
@@ -44,6 +50,7 @@ const OPTIONS = {
   note: { type: 'string' },
   reject: { type: 'boolean' },
   help: { type: 'boolean', short: 'h' },
+  version: { type: 'boolean', short: 'v' },
 } as const;
 
 function main(argv: string[]): number {
@@ -55,6 +62,10 @@ function main(argv: string[]): number {
   const printRun = (v: RunView, config: Config, extra = '') =>
     print(v, `${extra}${describeRun(v.state, config, v.action, v.dir)}`);
 
+  if (opts.version || command === 'version') {
+    print({ version: version() }, version());
+    return 0;
+  }
   if (!command || opts.help || command === 'help') {
     console.log(USAGE);
     return command || opts.help ? 0 : 1;
