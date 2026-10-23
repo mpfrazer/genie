@@ -30,3 +30,10 @@ genie uses [Semantic Versioning](https://semver.org), driven by [Conventional Co
 3. Merging the release PR tags `vX.Y.Z` and publishes a GitHub release.
 
 Before 1.0, `feat` bumps the minor version and `fix` bumps the patch version. The version of record is `.claude-plugin/plugin.json` (`genie --version` reads it). `scripts/check-versions.mjs` fails CI if any version field drifts from it.
+
+## Contributing
+All changes go through pull requests. Nothing is pushed straight to `main`. This repo's plan doesn't offer GitHub branch protection, so each clone should enable the local guard, which refuses pushes to `main`:
+
+```sh
+git config core.hooksPath .githooks
+```
