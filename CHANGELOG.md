@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/mpfrazer/genie/compare/v0.3.0...v0.4.0) (2026-10-23)
+
+
+### Features
+
+* add /genie:abort, a genie status line, and a plugin marketplace ([#10](https://github.com/mpfrazer/genie/issues/10)) ([c90f1c8](https://github.com/mpfrazer/genie/commit/c90f1c8fcb84c775fbd41898351975fc0cd58eb0))
+* **engine:** add per-slice git worktree manager ([#11](https://github.com/mpfrazer/genie/issues/11)) ([9df6fd2](https://github.com/mpfrazer/genie/commit/9df6fd2e80e911de48de54288f8ed1b4687315cf))
+* **engine:** structured plan.yaml and per-slice state ([#13](https://github.com/mpfrazer/genie/issues/13)) ([0081fcc](https://github.com/mpfrazer/genie/commit/0081fccbc8da22429bba1cadf805d54aae72d438))
+
+
+### Bug Fixes
+
+* wait for CI to register before pr.ready watches it ([#12](https://github.com/mpfrazer/genie/issues/12)) ([42f087d](https://github.com/mpfrazer/genie/commit/42f087d738d47d358022114d2c92e5696822c12f))
+
 ## [0.3.0](https://github.com/mpfrazer/genie/compare/v0.2.0...v0.3.0) (2026-10-23)
 
 
