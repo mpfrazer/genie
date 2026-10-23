@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Maintains a release PR that bumps every version field and CHANGELOG.md.
+      # Merging that PR tags vX.Y.Z and publishes a GitHub release.
+      # PRs opened with the default GITHUB_TOKEN don't trigger CI; set RELEASE_PLEASE_TOKEN
+      # (a fine-grained PAT or app token with contents + pull-requests write) so they do.
+      - uses: googleapis/release-please-action@v5
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

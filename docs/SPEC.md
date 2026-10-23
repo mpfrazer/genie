@@ -1,0 +1,276 @@
+# genie — Specification (v0 draft)
+
+> Status: **draft for discussion**. Sections marked **[OPEN]** need a decision.
+
+## 1. Purpose
+
+genie is a Claude Code plugin that gives every repo the same development lifecycle, from idea to release. It runs in two modes over a single pipeline:
+
+- **Guided mode**: linear and human-paced. genie runs one stage, shows what it produced, and waits for you before moving on. It is a structured co-pilot.
+- **Orchestrated mode**: a looping engine. genie decomposes the work, runs slices in parallel through subagents, enforces gates automatically, and stops only where a gate needs a human (or when a budget or failure limit is hit).
+
+Both modes use the same stages, artifacts, and gates. The difference is **who advances the pipeline**: you, or the engine.
+
+### Goals
+- Consistent workflow, artifacts, and quality bar across all repos.
+- Gates are explicit, inspectable, and configurable per repo.
+- Runs are durable and resumable: state lives on disk, not in a context window.
+- Parallel work never conflicts: one git worktree per slice.
+- Safe by default: irreversible or outward-facing steps (push, merge, deploy, release) are gated.
+
+### Non-goals (for now)
+- Replacing CI/CD systems. genie *invokes* and *waits on* them; it is not one.
+- Multi-repo / monorepo-wide orchestration (single repo per run in v1).
+- A UI beyond Claude Code itself (status line / commands only in v1).
+
+## 2. Core concepts
+
+| Concept | Definition |
+|---|---|
+| **Run** | One end-to-end execution of the pipeline for a piece of intent (feature, fix, chore). Has an ID, a mode, and a state. |
+| **Intent** | The original "what and why" from the human. It is immutable once approved and serves as the reference for intent review. |
+| **Spec** | A structured elaboration of intent: requirements, acceptance criteria, constraints, non-goals, risks. |
+| **Slice** | An independently implementable, testable, reviewable unit of work decomposed from the spec. Has dependencies on other slices (DAG). |
+| **Stage** | A step in the pipeline that produces an artifact (spec, plan, diff, PR, build, release). |
+| **Gate** | A checkpoint between stages that returns a verdict on an artifact. Gates are where configuration lives. |
+| **Profile** | A named preset of gate settings (e.g. `internal-tool`, `service`, `library`). A repo picks a profile and can override it. |
+
+## 3. Pipeline
+
+```
+ Intake ──▶ Spec ──▶ Decompose ──▶ ┌─ per slice (parallel, DAG-ordered) ─────────────────┐ ──▶ Integrate ──▶ PR ──▶ Intent Review ──▶ Approval ──▶ Merge ──▶ Build ──▶ Deploy ──▶ Release
+                                   │ Implement ─▶ Verify ─▶ Adversarial Review ─▶ Commit │
+                                   └──────────────────────────────────────────────────────┘
+```
+
+Each stage has optional **entry gates** (which must pass before its work starts) and **exit gates** (which must pass before the stage completes):
+
+| Stage | Entry gates | Work | Exit gates |
+|---|---|---|---|
+| `spec` | | write `spec.md` | `spec.approved` |
+| `decompose` | | write `plan.md` | `plan.approved` |
+| `implement` | | code + tests | `slice.verified`, `slice.reviewed` |
+| `integrate` | | merge slices onto the run branch | `integration.verified` |
+| `pr` | | push, open PR | `pr.ready`, `intent.reviewed` |
+| `merge` | `pr.approved` | merge | |
+| `build` | | (gate only) | `build.passed` |
+| `deploy` | `deploy.approved` | deploy | `deploy.healthy` |
+| `release` | `release.approved` | version, changelog, tag, publish | |
+
+The gates:
+
+| # | Gate | Default kind | Checks | On fail |
+|---|---|---|---|---|
+| G1 | `spec.approved` | human | Spec is complete and matches intent | Revise spec |
+| G2 | `plan.approved` | human (guided) / agent (orchestrated) | Slices cover the spec, are independent enough, the DAG is acyclic, sizing is reasonable | Re-decompose |
+| G3 | `slice.verified` | automated | Build, lint, typecheck, tests (repo-defined commands) | Back to Implement (retry budget) |
+| G4 | `slice.reviewed` | agent (adversarial) | Correctness, security, test adequacy, scope creep vs. slice | Back to Implement with findings |
+| G5 | `integration.verified` | automated | Full suite on the integrated branch | Identify the offending slice, back to Implement |
+| G6 | `pr.ready` | automated | PR created, description generated, CI green | Fix and re-push |
+| G7 | `intent.reviewed` | agent | Final diff vs. original **intent** (not spec): did we build the right thing? | Back to Spec or Decompose |
+| G8 | `pr.approved` | human | Human (or required reviewers) approve | Address review comments, back to Implement |
+| G9 | `build.passed` | automated | Release build artifact produced | Halt |
+| G10 | `deploy.approved` / `deploy.healthy` | human + automated | Approval to deploy; post-deploy health checks | Rollback hook, halt |
+| G11 | `release.approved` | human | Version, changelog, tag, publish | Halt |
+
+## 4. Gates
+
+### 4.1 Gate model
+Every gate has the same shape:
+
+```yaml
+gate: slice.reviewed
+enabled: true            # false = skipped, and the skip is recorded in the run log
+kind: agent              # automated | agent | human | agent+human
+evaluator: adversarial-reviewer   # agent name, or a command for automated gates
+blocking: true           # false = advisory: record findings, don't stop
+retries: 3               # automatic fix→re-evaluate loops before escalating to a human
+escalate_to: human       # what happens when retries are exhausted
+```
+
+Verdicts: `pass` | `fail` (with structured findings) | `needs_human` | `skipped`.
+
+Every verdict is written to the run log with its evidence, so you can always answer "why did this ship?"
+
+### 4.2 Gate kinds
+- **automated**: a shell command; the exit code decides. Output is captured as evidence.
+- **agent**: a subagent with a fixed rubric that returns structured findings. Adversarial gates use a *different* agent (and ideally a fresh context) from the one that wrote the code.
+- **human**: the engine pauses and notifies. In guided mode every stage boundary is effectively a human gate.
+- **agent+human**: an agent pre-reviews and the human decides with the agent's findings in hand.
+
+### 4.3 Stages vs. gates
+Disabling a **stage** means "don't do this step at all" (`stages.release.enabled: false`, so this repo doesn't release).
+Disabling a **gate** means "do the step without this check" (`gates.intent.reviewed.enabled: false`).
+These are deliberately separate. Turning off `release.approved` would mean *releasing without approval*, not *skipping releases*.
+
+### 4.4 Invariants (not configurable)
+- An agent can never satisfy a `human` gate.
+- The author agent of an artifact never evaluates that artifact's gate.
+- Skipped gates are logged, never silent.
+- `push`, `merge`, `deploy`, and `release` actions are blocked by hooks unless their preceding gate has a recorded `pass`.
+- The engine accepts each verdict only from its own source: automated gates take verdicts only from `genie gate --run`, agent gates only from agents, and human gates only from `genie approve`.
+
+### 4.5 The human approval channel
+`genie approve` is the only way a human gate is satisfied, so it must be unreachable by the model:
+- `/genie:approve` is a slash command with `disable-model-invocation: true` that runs the CLI through `!` pre-execution, not through the Bash tool.
+- A `PreToolUse` hook denies any Bash tool call that invokes `genie approve`.
+- **To verify:** Claude Code documents PreToolUse as firing "only when Claude calls a tool". We still need to confirm it does not fire for `!` pre-execution (or the approve command blocks itself).
+
+## 5. Per-repo configuration
+
+Location: `.genie/config.yaml`, committed to the repo.
+
+Precedence (lowest to highest): plugin defaults → profile → user (`~/.genie/config.yaml`) → repo → run-time flags.
+
+```yaml
+version: 1
+profile: service              # internal-tool | service | library | prototype
+
+mode:
+  default: guided             # guided | orchestrated
+  max_parallel_slices: 4
+
+commands:                     # how genie verifies things in this repo
+  install: npm ci
+  build: npm run build
+  lint: npm run lint
+  typecheck: npm run typecheck
+  test: npm test
+  test_changed: npm test -- --changed
+
+forge:
+  provider: github            # github | gitlab | none
+  base_branch: main
+  branch_prefix: genie/
+  pr_draft_until: intent.reviewed
+
+stages:                       # turn whole steps on/off
+  release:
+    enabled: false            # this repo doesn't release
+
+gates:                        # tune or disable individual checks
+  intent.reviewed:
+    enabled: false            # e.g. internal tooling
+  slice.reviewed:
+    retries: 2
+  deploy.approved:
+    kind: human
+
+deploy:
+  command: ./scripts/deploy.sh {env}
+  health_check: ./scripts/health.sh {env}
+  rollback: ./scripts/rollback.sh {env}
+  environments: [staging, production]
+
+release:
+  versioning: semver          # semver | calver | none
+  changelog: conventional-commits
+  publish: npm publish
+
+budgets:                      # orchestrated-mode safety rails
+  max_iterations_per_slice: 5
+  max_run_duration: 4h
+  max_cost_usd: 50
+```
+
+### Built-in profiles
+The Deploy and Release columns are **stages**; the other columns are gates. `genie init` also disables the deploy stage until `deploy.command` is set.
+
+| Profile | Intent review | Adversarial review | Human PR approval | Deploy | Release |
+|---|---|---|---|---|---|
+| `prototype` | off | advisory | off | off | off |
+| `internal-tool` | off | on | on | human | off |
+| `service` | on | on | on | human + health | human |
+| `library` | on | on | on | off | human |
+
+## 6. Mapping to Claude Code plugin primitives
+
+| Primitive | Use in genie |
+|---|---|
+| **Slash commands** | `/genie:init`, `/genie:new <intent>`, `/genie:status`, `/genie:next` (guided step), `/genie:run` (orchestrate), `/genie:approve <gate>`, `/genie:resume`, `/genie:abort` |
+| **Skills** | The stage playbooks (`spec`, `decompose`, `implement`, `review`, `pr`, `release`). They are loaded on demand so each stage gets precise instructions without bloating context. |
+| **Subagents** | `spec-writer`, `decomposer`, `implementer`, `adversarial-reviewer`, `intent-reviewer`, `integrator`, `release-manager`. Each has scoped tools. Reviewers are read-only. |
+| **Hooks** | Enforcement: `PreToolUse` blocks `git push`, `gh pr merge`, and deploy/release commands without a passing gate. `SessionStart` loads active-run context. `Stop`/`SubagentStop` record stage completion. |
+| **State / engine** | See §7. |
+| **Status line** | Plugins can't ship the main status line; only user/project `settings.json` can set it. `/genie:init` can offer to add one to the project settings that calls `genie status --line`. |
+
+### Repo layout (plugin)
+```
+genie/
+├── .claude-plugin/plugin.json
+├── commands/            # slash commands
+├── agents/              # subagent definitions
+├── skills/              # stage playbooks
+├── hooks/hooks.json     # gate enforcement + lifecycle
+├── schema/              # JSON Schema for config (editor support + runtime validation)
+└── engine/              # TypeScript state machine + CLI (see §7)
+    ├── src/config/      # defaults, profile overlays, loader
+    └── dist/genie.mjs   # committed single-file bundle: the plugin runs with no npm install
+```
+
+### Per-repo layout (created by `/genie:init`)
+```
+.genie/
+├── config.yaml          # committed
+├── runs/                # gitignored by default
+│   └── <run-id>/
+│       ├── state.json   # current stage, slice statuses, gate verdicts
+│       ├── intent.md
+│       ├── spec.md
+│       ├── plan.md      # slices + DAG (structured plan.yaml once orchestration lands)
+│       ├── evidence/    # check logs and review findings, per gate attempt
+│       └── log.jsonl    # append-only event + verdict log
+```
+
+## 7. Engine architecture
+
+> **Decided (2026-10-22): Option B, a deterministic `genie` CLI written in TypeScript/Node.** Option C (MCP) may be layered on later.
+
+The key decision is **where the loop and state machine live**.
+
+- **A. Prompt-driven**: Claude is the orchestrator. The skills/commands describe the pipeline and Claude follows them, spawning subagents. Simplest, but non-deterministic: loops drift, gates can be "forgotten," and long runs are hard to resume.
+- **B. Deterministic engine + Claude as worker** *(recommended)*: a small `genie` CLI owns `state.json`, the transition rules, gate evaluation for automated gates, and budgets. Claude (commands/agents) asks the engine "what's next?", does the work, and reports results back. Hooks call the same CLI to enforce gates. This makes it deterministic, resumable, and testable. Claude does the judgment work and the engine does the bookkeeping.
+- **C. Engine as MCP server**: same as B but exposed as MCP tools (`genie_next`, `genie_report`, `genie_gate`). It has richer typed I/O but more moving parts. It could be layered on B later.
+
+### Engine CLI (v0)
+Each command prints text by default; pass `--json` for output Claude can parse.
+
+| Command | Effect |
+|---|---|
+| `genie init [--profile p]` | Detect commands/forge, write `.genie/config.yaml` and `.genie/.gitignore` |
+| `genie config` | Print the resolved config and its sources |
+| `genie new "<intent>"` | Create a run and write `intent.md` |
+| `genie status` / `genie next` | Show the run, or only the next action |
+| `genie done <stage>` | Mark stage work complete (checks the required artifact), then move to its exit gates |
+| `genie gate <g> --run` | Run an automated gate's checks, record the verdict and its evidence |
+| `genie gate <g> --verdict … --by <agent>` | Record an agent verdict (the stage author is refused) |
+| `genie approve <g> [--reject]` | Record a human decision (see §4.5) |
+| `genie abort` | Abort the run |
+
+A failed gate sends the run back to its rework stage and resets the gates in between. Once the retry budget is used up, the gate escalates to `needs_human` (or halts). A human rejection sends the work back with a fresh retry budget.
+
+Parallel slices: each slice runs in its own git worktree on branch `genie/<run>/<slice>`, then merges into an integration branch `genie/<run>` that becomes the PR.
+
+## 8. Modes in detail
+
+### Guided
+`/genie:next` advances exactly one stage, shows the artifact, and stops. Slices run sequentially by default. The human can edit any artifact on disk before continuing, and genie re-reads from disk.
+
+### Orchestrated
+`/genie:run` loops: ask engine for ready work → dispatch subagents (up to `max_parallel_slices`) → evaluate gates → route failures back with findings → repeat. It halts on:
+- a pending `human` gate (notify, then wait for `/genie:approve`),
+- an exhausted retry budget on any gate,
+- a run budget (time/cost/iterations),
+- `/genie:abort`.
+
+Modes are switchable mid-run (`/genie:run` on a guided run, or Ctrl-C to drop back to guided).
+
+## 9. Open questions
+1. ~~**Engine language/runtime**~~: **Decided: TypeScript/Node.**
+2. **Forge scope for v1**: GitHub only (via `gh`) or abstract GitLab from day one?
+3. **Issue tracker integration**: should intake pull from Linear/Jira/GitHub Issues, or start from a prompt only?
+4. **Where human approvals happen**: only in Claude Code, or also via PR review state on GitHub (G8 = "PR approved on GitHub")?
+5. **Intent review input**: the original intent only, or intent + spec + linked issue?
+6. **Slice merge strategy**: integration branch → single PR (proposed), or one PR per slice (stacked PRs)?
+7. **Run artifacts in git**: gitignore `runs/` (proposed) or commit specs/plans as permanent design records?
+8. **Notifications** for pending human gates in orchestrated mode: terminal only, or push/Slack?
