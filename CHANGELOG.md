@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/mpfrazer/genie/compare/v0.2.0...v0.3.0) (2026-10-23)
+
+
+### Features
+
+* guided runs with /genie:new, /genie:next, /genie:status and subagents ([#8](https://github.com/mpfrazer/genie/issues/8)) ([991ee02](https://github.com/mpfrazer/genie/commit/991ee0283f04a092aea3d9ec8da12035b7bafdeb))
+
 ## [0.2.0](https://github.com/mpfrazer/genie/compare/v0.1.0...v0.2.0) (2026-10-23)
 
 
