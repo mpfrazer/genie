@@ -5,5 +5,11 @@
   "author": {
     "name": "Mike Frazer"
   },
-  "keywords": ["orchestration", "workflow", "agents", "gates", "code-review"]
+  "keywords": [
+    "orchestration",
+    "workflow",
+    "agents",
+    "gates",
+    "code-review"
+  ]
 }
