@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/mpfrazer/genie/compare/v0.4.0...v0.5.0) (2026-10-23)
+
+
+### Features
+
+* orchestrated mode with /genie:run and parallel slice worktrees ([#17](https://github.com/mpfrazer/genie/issues/17)) ([c4070c7](https://github.com/mpfrazer/genie/commit/c4070c7979796b9e446fc8096d98d7a152597aa5))
+
+
+### Bug Fixes
+
+* allow reads after cd into a run dir and require reviewer findings ([#15](https://github.com/mpfrazer/genie/issues/15)) ([72ffb89](https://github.com/mpfrazer/genie/commit/72ffb89454b9836c3d562169c390e17991d0c231))
+
 ## [0.4.0](https://github.com/mpfrazer/genie/compare/v0.3.0...v0.4.0) (2026-10-23)
 
 
