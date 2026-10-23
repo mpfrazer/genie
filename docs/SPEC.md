@@ -327,7 +327,24 @@ Each command prints text by default; pass `--json` for output Claude can parse.
 
 A failed gate sends the run back to its rework stage and resets the gates in between. Once the retry budget is used up, the gate escalates to `needs_human` (or halts). A human rejection sends the work back with a fresh retry budget.
 
-Parallel slices: each slice runs in its own git worktree on branch `genie/<run>/<slice>`, then merges into an integration branch `genie/<run>` that becomes the PR.
+### Parallel slices
+Each slice runs in its own git worktree, on its own slice branch. Finished slices merge onto the run branch `genie/<run>`, which becomes the PR. `engine/src/worktree.ts` implements this; it isn't wired in yet.
+
+| | Name / location |
+|---|---|
+| Run branch | `genie/<run-id>` (`state.branch`) |
+| Slice branch | `genie/<run-id>--<slice-id>` |
+| Slice worktree | `.genie/worktrees/<run-id>/<slice-id>` (gitignored by `genie init`) |
+| Integration worktree | `.genie/worktrees/<run-id>/_integration`, only when needed |
+
+- **Branch naming.** Slice branches are siblings of the run branch, not children: git can't hold both `genie/<run>` and `genie/<run>/S1`. Run ids never contain `--` (slugify collapses dash runs), so the suffix can't collide with another run. Slice ids are letters, digits, `_` and single dashes, start alphanumeric, and are checked with `git check-ref-format`.
+- **Where merges happen.** Git won't check a branch out twice, so a slice merges (`--no-ff`, one merge commit per slice) wherever the run branch is already checked out; in guided mode that's usually the user's main checkout. If it isn't checked out anywhere, a dedicated integration worktree is used, leaving the user's checkout alone. On conflict the merge is aborted, and the conflicting files are returned for the orchestrator to route back to the slice's implementer. Both branches are left exactly as they were.
+- **Safety.** Removing a slice refuses, before changing anything, when its worktree has uncommitted (including untracked) changes or its branch has commits not on the run branch, unless forced. Pruning checks every slice first.
+
+Integration points for orchestrated mode:
+- **Dispatch.** When a slice becomes ready, `createSliceWorktree` gives its implementer subagent a working directory. Its `done`/gate calls carry the slice id.
+- **Merging.** After a slice passes `slice.verified` and `slice.reviewed`, `mergeSlice` lands it on the run branch. A `conflict` result routes back to that slice with the file list as feedback.
+- **Cleanup.** After `integrate` passes, or on abort, `pruneRunWorktrees` cleans up (forced on abort).
 
 ## 8. Modes in detail
 
