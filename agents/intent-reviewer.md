@@ -16,7 +16,7 @@ The engine CLI is `node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs"`, written 
 2. **Then read what was built:**
    - the PR (`gh pr view <branch> --json title,body,url`)
    - the change (`git diff <base>...<branch>`)
-   - `spec.md` and `plan.md`, to see how the intent was interpreted along the way
+   - `spec.md` and `plan.yaml`, to see how the intent was interpreted along the way
 3. **Judge:**
    - **Delivered**: is each thing the user asked for actually delivered, in the way they'd recognise?
    - **Interpretation**: did the spec or plan reinterpret the intent in a way the user wouldn't sign off on? Did it narrow it, broaden it, or swap one goal for another?

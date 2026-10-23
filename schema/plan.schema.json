@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "genie plan",
+  "description": "The decompose stage's contract (.genie/runs/<id>/plan.yaml): the slices the implement stage works through.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["slices"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "slices": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "goal", "covers", "tests", "depends_on"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+            "description": "Short, branch-safe id, e.g. S1."
+          },
+          "title": { "type": "string", "minLength": 1 },
+          "goal": { "type": "string", "minLength": 1 },
+          "covers": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^R[0-9]+$" },
+            "description": "Requirement ids from spec.md this slice delivers."
+          },
+          "touches": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Files or modules likely to change."
+          },
+          "tests": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Tests to add or change to prove the slice works."
+          },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Ids of slices that must pass before this one starts."
+          }
+        }
+      }
+    }
+  }
+}

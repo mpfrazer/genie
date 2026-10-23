@@ -42,7 +42,8 @@ function runAt(stage: 'implement' | 'pr' | 'merge', cfg = config()): RunState {
     recordVerdict(run, cfg, { gate, verdict: 'pass', source: 'human', by: 'human' }, ctx);
   const auto = (gate: Parameters<typeof recordVerdict>[2]['gate'], source: 'automated' | 'agent', by: string) =>
     recordVerdict(run, cfg, { gate, verdict: 'pass', source, by }, ctx);
-  const work = (s: Parameters<typeof completeWork>[2]) => completeWork(run, cfg, s, 'claude', () => true, ctx);
+  const plan = [{ id: 'S1', title: 'one', goal: 'do it', covers: [], tests: ['it works'], depends_on: [] }];
+  const work = (s: Parameters<typeof completeWork>[2]) => completeWork(run, cfg, s, 'claude', () => true, ctx, { plan });
 
   work('spec');
   human('spec.approved');
@@ -99,6 +100,15 @@ describe('invariants (always on)', () => {
     assert.equal(check('genie done implement', { agent: 'genie:implementer' })?.decision, 'deny');
     assert.equal(check('genie done implement --by implementer', { agent: 'genie:implementer' })?.decision, undefined);
     assert.equal(check('genie done spec')?.decision, undefined);
+  });
+
+  it('still finds the subcommand and identity when --slice comes first', () => {
+    assert.equal(check('genie --slice S1 approve slice.verified')?.decision, 'deny');
+    const gate = 'genie --slice S2 gate slice.reviewed --verdict pass --by adversarial-reviewer';
+    assert.equal(check(gate)?.decision, 'deny');
+    assert.equal(check(gate, { agent: 'genie:adversarial-reviewer' })?.decision, undefined);
+    assert.equal(check('genie --slice S1 done implement --by implementer', { agent: 'genie:implementer' })?.decision, undefined);
+    assert.equal(check('genie --slice S1 done implement --by implementer')?.decision, 'deny');
   });
 });
 

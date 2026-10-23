@@ -1,7 +1,7 @@
 import type { Action } from './engine.ts';
-import { STAGE_DEFS, STAGES } from './pipeline.ts';
+import { SLICE_GATES, STAGE_DEFS, STAGES } from './pipeline.ts';
 import type { Config } from './config/types.ts';
-import type { RunState, StagePhase } from './state.ts';
+import { findSlice, type RunState, type SlicePhase, type StagePhase } from './state.ts';
 import type { CheckResult } from './checks.ts';
 
 const PHASE_MARK: Record<StagePhase, string> = {
@@ -15,18 +15,23 @@ const PHASE_MARK: Record<StagePhase, string> = {
 
 /** One line telling the reader what happens next, including the command to run. */
 export function describeAction(action: Action): string {
+  const slice = 'slice' in action && action.slice ? action.slice : undefined;
+  const of = slice ? ` slice ${slice.id} (${slice.title})` : '';
+  const flag = slice ? ` --slice ${slice.id}` : '';
   switch (action.type) {
-    case 'work':
-      return `Work on ${action.stage}${action.agent ? ` (${action.agent} subagent)` : ''}: ${action.instructions}${action.artifact ? ` (write ${action.artifact})` : ''}\n  then: genie done ${action.stage}${action.agent ? ` --by ${action.agent}` : ''}`;
+    case 'work': {
+      const what = slice ? slice.goal : action.instructions;
+      return `Work on ${action.stage}${of}${action.agent ? ` (${action.agent} subagent)` : ''}: ${what}${action.artifact ? ` (write ${action.artifact})` : ''}\n  then: genie done ${action.stage}${flag}${action.agent ? ` --by ${action.agent}` : ''}`;
+    }
     case 'evaluate':
       return action.kind === 'automated'
-        ? `Evaluate ${action.gate} (automated: ${action.checks.join(', ') || 'no checks'})\n  run: genie gate ${action.gate} --run`
-        : `Evaluate ${action.gate} with the ${action.evaluator ?? 'configured'} agent\n  then: genie gate ${action.gate} --verdict pass|fail --by ${action.evaluator ?? '<agent>'} [--findings <file>]`;
+        ? `Evaluate ${action.gate}${of} (automated: ${action.checks.join(', ') || 'no checks'})\n  run: genie gate ${action.gate}${flag} --run`
+        : `Evaluate ${action.gate}${of} with the ${action.evaluator ?? 'configured'} agent\n  then: genie gate ${action.gate}${flag} --verdict pass|fail --by ${action.evaluator ?? '<agent>'} [--findings <file>]`;
     case 'await_human': {
       const review = action.agentReview
         ? `\n  agent pre-review by ${action.agentReview.by}: ${action.agentReview.verdict}${action.agentReview.note ? ` (${action.agentReview.note})` : ''}`
         : '';
-      return `Waiting for a human decision on ${action.gate}: ${action.reason}${review}\n  human: /genie:approve ${action.gate}  (or --reject)`;
+      return `Waiting for a human decision on ${action.gate}${of}: ${action.reason}${review}\n  human: /genie:approve ${action.gate}${flag}  (or --reject)`;
     }
     case 'halted':
       return `Run halted: ${action.reason}`;
@@ -50,9 +55,27 @@ export function describeRun(state: RunState, config: Config, action: Action, dir
       })
       .join('  ');
     lines.push(`  ${PHASE_MARK[ss.phase]} ${stage.padEnd(10)} ${(current ? ss.phase : '').padEnd(6)} ${gates}`);
+    if (stage === 'implement') lines.push(...describeSlices(state, config));
   }
   lines.push('', describeAction(action));
   return lines.join('\n');
+}
+
+const SLICE_MARK: Record<SlicePhase, string> = { work: '▶', exit: '▶', passed: '✓' };
+
+/** One line per slice under the implement stage: progress and its gates. */
+function describeSlices(state: RunState, config: Config): string[] {
+  return state.slices.map((slice) => {
+    const deps = slice.def.depends_on.filter((d) => findSlice(state, d)?.phase !== 'passed');
+    const phase = slice.phase === 'passed' ? '' : deps.length > 0 ? `waits:${deps.join(',')}` : slice.phase;
+    const gates = SLICE_GATES.map((g) => {
+      const gs = slice.gates[g];
+      const mark = !config.gates[g].enabled && gs.status === 'pending' ? 'off' : gs.status;
+      return `${g}:${mark}${gs.failures ? `(${gs.failures}✗)` : ''}`;
+    }).join('  ');
+    const mark = deps.length > 0 ? '·' : SLICE_MARK[slice.phase];
+    return `      ${mark} ${slice.def.id.padEnd(4)} ${phase.padEnd(10)} ${gates}  ${slice.def.title}`;
+  });
 }
 
 export function describeChecks(results: CheckResult[]): string {

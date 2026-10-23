@@ -2,9 +2,10 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { GenieError } from '../errors.ts';
-import { abort, advance, completeWork, nextAction, type Action, type Ctx } from '../engine.ts';
-import { STAGE_DEFS, STAGES, type GateName, type StageName } from '../pipeline.ts';
-import { newRunState, type RunState } from '../state.ts';
+import { abort, advance, completeWork, nextAction, nextActions, type Action, type Ctx } from '../engine.ts';
+import { STAGE_DEFS, STAGES, isSliceGate, type GateName, type StageName } from '../pipeline.ts';
+import { loadPlan } from '../plan.ts';
+import { findSlice, newRunState, type RunState } from '../state.ts';
 import type { Mode } from '../config/types.ts';
 import { appendLog, currentRunId, loadRun, readLog, runDir, saveRun, setCurrentRun, writeAtomic, type LogEvent } from '../store.ts';
 import { mutateRun, type Session } from '../session.ts';
@@ -65,42 +66,70 @@ export function newRun(session: Session, intent: string, mode?: Mode): RunView {
 
 export interface Feedback {
   gate: GateName;
+  /** For slice-gate failures: the slice the verdict was about. */
+  slice?: string;
   by?: string;
   note?: string;
   evidence?: string[];
 }
 
-/** Everything an agent needs to perform the next step, as printed by `genie next --json`. */
-export interface NextView {
-  run: Pick<RunState, 'id' | 'title' | 'mode' | 'status' | 'stage' | 'branch' | 'base'> & { dir: string };
+export interface ActionView {
   action: Action;
-  /** When the current stage is being reworked: the failed verdict that sent it back. */
+  /** When this action's stage or slice is being reworked: the failed verdict that sent it back. */
   feedback?: Feedback;
 }
 
-/** The verdict behind the most recent rework of the run's current stage, if it is mid-rework. */
-export function reworkFeedback(state: RunState, log: LogEvent[]): Feedback | undefined {
+/** Everything an agent needs to perform the next step, as printed by `genie next --json`. */
+export interface NextView extends ActionView {
+  run: Pick<RunState, 'id' | 'title' | 'mode' | 'status' | 'stage' | 'branch' | 'base'> & { dir: string };
+  /**
+   * Every action that can be taken now, in plan order; `action` is the first. More than one only
+   * in the implement stage, when several slices are ready.
+   */
+  actions: ActionView[];
+}
+
+function verdictBefore(log: LogEvent[], index: number, gate: GateName, slice?: string): Feedback | undefined {
+  const verdict = log
+    .slice(0, index)
+    .findLast((e) => e.type === 'gate.verdict' && e.gate === gate && (!isSliceGate(gate) || e.slice === slice));
+  if (!verdict?.gate) return undefined;
+  return {
+    gate: verdict.gate,
+    ...(verdict.slice ? { slice: verdict.slice } : {}),
+    by: verdict.by,
+    note: verdict.note,
+    evidence: verdict.evidence,
+  };
+}
+
+/**
+ * The verdict behind the most recent rework of the run's current stage, or of `slice` when given,
+ * if that work is mid-rework. Fix-up slices get the run-level verdict that created them.
+ */
+export function reworkFeedback(state: RunState, log: LogEvent[], slice?: string): Feedback | undefined {
   if (state.stages[state.stage].phase !== 'work') return undefined;
+  if (slice && findSlice(state, slice)?.phase !== 'work') return undefined;
+  const [doneType, reworkType] = slice ? ['slice.work_done', 'slice.rework'] : ['stage.work_done', 'stage.rework'];
   for (let i = log.length - 1; i >= 0; i--) {
     const event = log[i]!;
-    if (event.type === 'stage.work_done' && event.stage === state.stage) return undefined;
-    if (event.type === 'stage.rework' && event.stage === state.stage) {
-      const verdict = log.slice(0, i).findLast((e) => e.type === 'gate.verdict' && e.gate === event.gate);
-      if (!verdict?.gate) return undefined;
-      return { gate: verdict.gate, by: verdict.by, note: verdict.note, evidence: verdict.evidence };
-    }
+    const mine = slice ? event.slice === slice : event.stage === state.stage;
+    if (!mine) continue;
+    if (event.type === doneType) return undefined;
+    if (event.type === reworkType && event.gate) return verdictBefore(log, i, event.gate, slice);
   }
   return undefined;
 }
 
 export function next(session: Session, id?: string): NextView {
-  const { state, action, dir, log } = status(session, id);
+  const { state, dir, log } = status(session, id);
   const { title, mode, status: runStatus, stage, branch, base } = state;
-  return {
-    run: { id: state.id, title, mode, status: runStatus, stage, branch, base, dir },
-    action,
-    feedback: reworkFeedback(state, log),
-  };
+  const actions = nextActions(state, session.config).map((action): ActionView => {
+    const slice = 'slice' in action ? action.slice?.id : undefined;
+    const feedback = action.type === 'work' ? reworkFeedback(state, log, slice) : undefined;
+    return feedback ? { action, feedback } : { action };
+  });
+  return { run: { id: state.id, title, mode, status: runStatus, stage, branch, base, dir }, ...actions[0]!, actions };
 }
 
 function git(root: string, args: string[]): string | undefined {
@@ -126,15 +155,18 @@ export function status(session: Session, id?: string): RunView & { log: LogEvent
   return { ...view(session, state), log: readLog(session.root, state.id) };
 }
 
-export function done(session: Session, stage: string, by: string, id?: string): RunView {
+export function done(session: Session, stage: string, by: string, id?: string, slice?: string): RunView {
   if (!STAGES.includes(stage as StageName)) {
     throw new GenieError(`unknown stage "${stage}" (expected one of: ${STAGES.join(', ')})`);
   }
+  if (slice && stage !== 'implement') throw new GenieError('--slice only applies to the implement stage');
   const { state } = mutateRun(session, id, (s, ctx) => {
-    if (s.stage === stage && s.stages[stage].phase === 'work' && STAGE_DEFS[stage].onRunBranch) {
-      checkRunBranch(session.root, s);
-    }
-    completeWork(s, session.config, stage as StageName, by, (rel) => existsSync(join(runDir(session.root, s.id), rel)), ctx);
+    const inProgress = s.stage === stage && s.stages[stage].phase === 'work';
+    if (inProgress && STAGE_DEFS[stage].onRunBranch) checkRunBranch(session.root, s);
+    const dir = runDir(session.root, s.id);
+    // The plan is validated (and snapshotted into the run) only once its stage's work is claimed done.
+    const plan = inProgress && stage === 'decompose' ? loadPlan(join(dir, 'plan.yaml'), join(dir, 'spec.md')).slices : undefined;
+    completeWork(s, session.config, stage as StageName, by, (rel) => existsSync(join(dir, rel)), ctx, { slice, plan });
   });
   return view(session, state);
 }

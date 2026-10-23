@@ -1,6 +1,6 @@
 ---
 name: decompose
-description: genie decompose stage. Breaks a run's spec.md into ordered, independently testable slices in plan.md.
+description: genie decompose stage. Breaks a run's spec.md into ordered, independently testable slices in plan.yaml.
 user-invocable: false
 ---
 
@@ -9,20 +9,26 @@ user-invocable: false
 Engine CLI: `node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs"` (`GENIE` below).
 
 1. Read `<run dir>/spec.md` (and `intent.md` for context). If `feedback` is present, the user rejected the previous plan: revise it to address their note.
-2. Write `<run dir>/plan.md` with one section per slice:
+2. Write `<run dir>/plan.yaml`. It's the contract the engine runs the implement stage from:
 
-   - **S<n>: title**
-   - **Goal**: one sentence.
-   - **Covers**: requirement ids from the spec.
-   - **Touches**: files and modules likely to change.
-   - **Tests**: what to add or change to prove it works.
-   - **Depends on**: earlier slice ids, or none.
+   ```yaml
+   slices:
+     - id: S1                      # short and branch-safe: letters, digits, - or _
+       title: Greeting for valid names
+       goal: greet(name) returns "Hello, <name>!" for non-empty strings.
+       covers: [R1, R2]            # requirement ids from spec.md
+       touches: [src/greet.js, test/greet.test.js]
+       tests:
+         - greet('Ada') returns 'Hello, Ada!'
+       depends_on: []              # ids of slices that must pass first
+   ```
 
-   End with a **Coverage** table mapping every requirement to the slices that cover it.
+   The schema is `${CLAUDE_PLUGIN_ROOT}/schema/plan.schema.json`. Every slice needs `id`, `title`, `goal`, `covers`, `tests` (at least one), and `depends_on`. `touches` is optional.
 3. Rules:
    - Each slice is independently testable and reviewable in one sitting.
-   - Dependencies form an acyclic graph, and slices are listed in a valid order (dependencies first).
-   - Every requirement is covered by at least one slice. Nothing is added that the spec doesn't call for.
+   - Dependencies form an acyclic graph. List slices in a valid order, dependencies first.
+   - Every requirement id (`R1`, `R2`, …) in spec.md is covered by at least one slice, and slices cover no ids the spec doesn't have. Add nothing the spec doesn't call for.
    - Prefer vertical slices (a working path end to end) over layers (all models, then all handlers).
-4. In guided mode the implementer subagent works through the slices in order, one commit per slice.
-5. Run `GENIE done decompose`. The `plan.approved` gate follows.
+   - Slices with no dependency between them can later run in parallel, so don't add `depends_on` edges that aren't real.
+4. Optionally write `<run dir>/plan.md` as a readable companion: the reasoning behind the cut, plus a coverage table. The user reviews both, but plan.yaml is what runs.
+5. Run `GENIE done decompose`. It validates plan.yaml (schema, unique ids, known dependencies, no cycles, full requirement coverage) and lists every problem it finds. Fix them all and run it again. The `plan.approved` gate follows.

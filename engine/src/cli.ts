@@ -21,12 +21,16 @@ Usage: genie <command> [options]
                                          Start a run
   status                                 Show the run and what happens next
   next                                   Show only what happens next
-  done <stage> [--by <author>]           Mark the current stage's work complete
-  gate <gate> --run                      Evaluate an automated gate
-  gate <gate> --verdict pass|fail|needs_human --by <agent> [--findings <file>] [--note <text>]
+  done <stage> [--by <author>] [--slice <id>]
+                                         Mark the current stage's work (or one slice's) complete
+  gate <gate> --run [--slice <id>]       Evaluate an automated gate
+  gate <gate> --verdict pass|fail|needs_human --by <agent> [--slice <id>] [--findings <file>] [--note <text>]
                                          Record an agent gate verdict
-  approve <gate> [--reject] [--note <text>]
+  approve <gate> [--reject] [--slice <id>] [--note <text>]
                                          Record a human decision (human-only channel)
+
+  --slice names the plan slice for slice gates (slice.verified, slice.reviewed) and implement work;
+  it can be left out when only one slice is waiting.
   abort [--note <text>]                  Abort the run
   hook pre-tool-use                      Claude Code PreToolUse hook (reads the payload on stdin)
 
@@ -51,6 +55,7 @@ const OPTIONS = {
   findings: { type: 'string' },
   note: { type: 'string' },
   reject: { type: 'boolean' },
+  slice: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean', short: 'v' },
 } as const;
@@ -103,16 +108,19 @@ function main(argv: string[]): number {
     case 'next': {
       const session = openSession(process.cwd());
       const v = next(session, id);
-      const feedback = v.feedback
-        ? `Reworking after ${v.feedback.gate} failed${v.feedback.note ? `: ${v.feedback.note}` : ''}${v.feedback.evidence?.length ? `\n  evidence: ${v.feedback.evidence.join(', ')}` : ''}\n`
-        : '';
-      print(v, `${feedback}${describeAction(v.action)}`);
+      const text = v.actions.map(({ action, feedback }) => {
+        const why = feedback
+          ? `Reworking after ${feedback.gate} failed${feedback.note ? `: ${feedback.note}` : ''}${feedback.evidence?.length ? `\n  evidence: ${feedback.evidence.join(', ')}` : ''}\n`
+          : '';
+        return `${why}${describeAction(action)}`;
+      });
+      print(v, text.join('\n\n'));
       return 0;
     }
     case 'done': {
       const session = openSession(process.cwd());
       if (!rest[0]) throw new GenieError('usage: genie done <stage>');
-      printRun(done(session, rest[0], opts.by ?? 'claude', id), session.config);
+      printRun(done(session, rest[0], opts.by ?? 'claude', id, opts.slice), session.config);
       return 0;
     }
     case 'gate': {
@@ -120,13 +128,21 @@ function main(argv: string[]): number {
       const gate = rest[0];
       if (!gate) throw new GenieError('usage: genie gate <gate> --run | --verdict <v> --by <agent>');
       if (opts.run) {
-        const r = runGate(session, gate, id);
+        const r = runGate(session, gate, id, opts.slice);
         printRun(r, session.config, `${describeChecks(r.results)}\n\n`);
-        return r.state.gates[gate as keyof typeof r.state.gates].status === 'pass' ? 0 : 2;
+        return r.verdict === 'pass' ? 0 : 2;
       }
       if (!opts.verdict) throw new GenieError('gate needs --run (automated) or --verdict (agent)');
       printRun(
-        agentVerdict(session, { gate, verdict: opts.verdict, by: opts.by ?? '', note: opts.note, findings: opts.findings, id }),
+        agentVerdict(session, {
+          gate,
+          verdict: opts.verdict,
+          by: opts.by ?? '',
+          slice: opts.slice,
+          note: opts.note,
+          findings: opts.findings,
+          id,
+        }),
         session.config,
       );
       return 0;
@@ -134,7 +150,7 @@ function main(argv: string[]): number {
     case 'approve': {
       const session = openSession(process.cwd());
       if (!rest[0]) throw new GenieError('usage: genie approve <gate> [--reject]');
-      printRun(approve(session, rest[0], opts.reject ?? false, opts.note, id), session.config);
+      printRun(approve(session, rest[0], opts.reject ?? false, opts.note, id, opts.slice), session.config);
       return 0;
     }
     case 'abort': {
