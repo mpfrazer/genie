@@ -9,6 +9,7 @@ import { findSlice, newRunState, type RunState } from '../state.ts';
 import type { Mode } from '../config/types.ts';
 import { appendLog, currentRunId, loadRun, readLog, runDir, saveRun, setCurrentRun, writeAtomic, type LogEvent } from '../store.ts';
 import { mutateRun, type Session } from '../session.ts';
+import { cleanUpAborted, dispatchWorktrees, settle } from '../orchestrate.ts';
 
 export interface RunView {
   state: RunState;
@@ -65,18 +66,30 @@ export function newRun(session: Session, intent: string, mode?: Mode): RunView {
 }
 
 export interface Feedback {
-  gate: GateName;
-  /** For slice-gate failures: the slice the verdict was about. */
+  /** The gate whose failed verdict sent the work back; absent for a merge conflict. */
+  gate?: GateName;
+  /** For slice-gate failures and merge conflicts: the slice. */
   slice?: string;
+  /** For a merge conflict: the files that conflicted with the run branch. */
+  conflict?: string[];
   by?: string;
   note?: string;
   evidence?: string[];
+}
+
+/** Orchestrated mode: where a slice's work happens. `base` is the run branch it merges onto. */
+export interface WorktreeView {
+  path: string;
+  branch: string;
+  base: string;
 }
 
 export interface ActionView {
   action: Action;
   /** When this action's stage or slice is being reworked: the failed verdict that sent it back. */
   feedback?: Feedback;
+  /** For slice actions in orchestrated mode: the slice's worktree. */
+  worktree?: WorktreeView;
 }
 
 /** Everything an agent needs to perform the next step, as printed by `genie next --json`. */
@@ -87,6 +100,8 @@ export interface NextView extends ActionView {
    * in the implement stage, when several slices are ready.
    */
   actions: ActionView[];
+  /** How many actions an orchestrator may run at once (`mode.max_parallel_slices`). */
+  parallel: number;
 }
 
 function verdictBefore(log: LogEvent[], index: number, gate: GateName, slice?: string): Feedback | undefined {
@@ -116,25 +131,51 @@ export function reworkFeedback(state: RunState, log: LogEvent[], slice?: string)
     const mine = slice ? event.slice === slice : event.stage === state.stage;
     if (!mine) continue;
     if (event.type === doneType) return undefined;
+    if (event.type === reworkType && Array.isArray(event.conflict)) {
+      return { slice, conflict: event.conflict as string[], note: event.note };
+    }
     if (event.type === reworkType && event.gate) return verdictBefore(log, i, event.gate, slice);
   }
   return undefined;
 }
 
 export function next(session: Session, id?: string): NextView {
-  const { state, dir, log } = status(session, id);
+  let { state, dir, log } = status(session, id);
+  if (state.mode === 'orchestrated') {
+    state = mutateRun(session, state.id, (s, ctx) => dispatchWorktrees(session.root, s, session.config, ctx)).state;
+  }
   const { title, mode, status: runStatus, stage, branch, base } = state;
   const actions = nextActions(state, session.config).map((action): ActionView => {
     const slice = 'slice' in action ? action.slice?.id : undefined;
     const feedback = action.type === 'work' ? reworkFeedback(state, log, slice) : undefined;
-    return feedback ? { action, feedback } : { action };
+    const wt = slice ? findSlice(state, slice)?.worktree : undefined;
+    return {
+      action,
+      ...(feedback ? { feedback } : {}),
+      ...(wt ? { worktree: { path: wt.path, branch: wt.branch, base: state.branch } } : {}),
+    };
   });
-  return { run: { id: state.id, title, mode, status: runStatus, stage, branch, base, dir }, ...actions[0]!, actions };
+  return {
+    run: { id: state.id, title, mode, status: runStatus, stage, branch, base, dir },
+    ...actions[0]!,
+    actions,
+    parallel: session.config.mode.max_parallel_slices,
+  };
 }
 
 function git(root: string, args: string[]): string | undefined {
   const res = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
   return res.status === 0 ? res.stdout.trim() : undefined;
+}
+
+/** A slice worked in its own worktree must be committed there, on its branch, ahead of the run branch. */
+function checkSliceBranch(root: string, state: RunState, slice: string, wt: { path: string; branch: string }): void {
+  const dirty = git(wt.path, ['status', '--porcelain']);
+  if (dirty === undefined) throw new GenieError(`slice ${slice}'s worktree ${wt.path} is missing or not a git checkout`);
+  if (dirty !== '') throw new GenieError(`slice ${slice} has uncommitted changes in ${wt.path}; commit them first`);
+  if (git(root, ['rev-list', '--count', `${state.branch}..${wt.branch}`]) === '0') {
+    throw new GenieError(`${wt.branch} has no commits ahead of ${state.branch}; commit slice ${slice}'s work in ${wt.path} first`);
+  }
 }
 
 /** Work that must live on the run branch has to be committed there, ahead of the base branch. */
@@ -151,7 +192,7 @@ function checkRunBranch(root: string, state: RunState): void {
 }
 
 export function status(session: Session, id?: string): RunView & { log: LogEvent[] } {
-  const { state } = mutateRun(session, id, () => undefined);
+  const state = settle(session, mutateRun(session, id, () => undefined).state);
   return { ...view(session, state), log: readLog(session.root, state.id) };
 }
 
@@ -162,16 +203,31 @@ export function done(session: Session, stage: string, by: string, id?: string, s
   if (slice && stage !== 'implement') throw new GenieError('--slice only applies to the implement stage');
   const { state } = mutateRun(session, id, (s, ctx) => {
     const inProgress = s.stage === stage && s.stages[stage].phase === 'work';
-    if (inProgress && STAGE_DEFS[stage].onRunBranch) checkRunBranch(session.root, s);
+    const working = stage === 'implement' ? s.slices.filter((sl) => sl.phase === 'work') : [];
+    const target = slice ? findSlice(s, slice) : working.length === 1 ? working[0] : undefined;
+    if (inProgress && target?.worktree) checkSliceBranch(session.root, s, target.def.id, target.worktree);
+    else if (inProgress && STAGE_DEFS[stage].onRunBranch) checkRunBranch(session.root, s);
     const dir = runDir(session.root, s.id);
     // The plan is validated (and snapshotted into the run) only once its stage's work is claimed done.
     const plan = inProgress && stage === 'decompose' ? loadPlan(join(dir, 'plan.yaml'), join(dir, 'spec.md')).slices : undefined;
     completeWork(s, session.config, stage as StageName, by, (rel) => existsSync(join(dir, rel)), ctx, { slice, plan });
   });
-  return view(session, state);
+  return view(session, settle(session, state));
 }
 
-export function abortRun(session: Session, reason: string | undefined, id?: string): RunView {
+export function abortRun(session: Session, reason: string | undefined, id?: string): RunView & { note?: string } {
   const { state } = mutateRun(session, id, (s, ctx) => abort(s, reason, ctx));
+  const note = cleanUpAborted(session, state.id);
+  return { ...view(session, state), ...(note ? { note } : {}) };
+}
+
+/** Switches a run between guided and orchestrated mode. Either can pick up where the other left off. */
+export function setMode(session: Session, mode: Mode, id?: string): RunView {
+  const { state } = mutateRun(session, id, (s, ctx) => {
+    if (s.mode === mode) return;
+    ctx.events.push({ ts: ctx.now, run: s.id, type: 'run.mode', note: `${s.mode} → ${mode}`, mode });
+    s.mode = mode;
+    s.updatedAt = ctx.now;
+  });
   return view(session, state);
 }

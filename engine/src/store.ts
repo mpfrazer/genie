@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { GenieError } from './errors.ts';
 import { migrateState, type RunState } from './state.ts';
 import type { GateName, StageName } from './pipeline.ts';
@@ -25,10 +25,18 @@ export interface LogEvent extends LogEventBody {
   run: string;
 }
 
-/** The git toplevel containing `cwd`, or `cwd` itself outside a repository. */
+/**
+ * The repository's main worktree containing `cwd`, or `cwd` itself outside a repository. From a
+ * linked worktree (such as a slice worktree) this is still the main checkout, where runs live.
+ */
 export function findRoot(cwd: string): string {
-  const res = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
-  return res.status === 0 ? res.stdout.trim() : cwd;
+  const res = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel'], {
+    cwd,
+    encoding: 'utf8',
+  });
+  if (res.status !== 0) return cwd;
+  const [common, toplevel] = res.stdout.trim().split('\n');
+  return common && basename(common) === '.git' ? dirname(common) : (toplevel ?? cwd);
 }
 
 export function genieDir(root: string): string {

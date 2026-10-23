@@ -95,6 +95,10 @@ describe('invariants (always on)', () => {
     assert.equal(check('cd .genie && cd runs/r1 && rm log.jsonl')?.decision, 'deny');
     assert.equal(check('cd /repo/.genie/runs/r1; cp /tmp/x state.json')?.decision, 'deny');
     assert.equal(check('cd .genie/runs/r1 && echo x > notes.md')?.decision, undefined);
+    // find only searches what it names, unless it deletes or runs something (seen in a live run).
+    assert.equal(check('find . -path ./.genie -prune -o -type f -print')?.decision, undefined);
+    assert.equal(check('find .genie/runs -name "*.json" -delete')?.decision, 'deny');
+    assert.equal(check('find .genie -exec rm {} +')?.decision, 'deny');
     assert.ok(isStatePath('/repo/.genie/runs/r1/evidence/x.log'));
     assert.ok(isStatePath('/repo/.genie/runs/r1/state.json.123.tmp'));
     assert.ok(!isStatePath('/repo/.genie/runs/r1/plan.md'));

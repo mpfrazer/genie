@@ -315,20 +315,24 @@ Each command prints text by default; pass `--json` for output Claude can parse.
 | `genie init [--profile p]` | Detect commands/forge, write `.genie/config.yaml` and `.genie/.gitignore` |
 | `genie config` | Print the resolved config and its sources |
 | `genie new "<intent>"` | Create a run and write `intent.md` |
-| `genie status` / `genie next` | Show the run (with per-slice progress), or only the next actions |
+| `genie status` / `genie next` | Show the run (with per-slice progress), or only the next actions. In an orchestrated run, `next` also creates a worktree for each ready slice and includes it in the action. |
+| `genie mode guided\|orchestrated` | Switch the run's mode; either picks up where the other left off |
 | `genie done <stage> [--slice <id>]` | Mark stage work complete (checks the required artifact; validates plan.yaml for decompose), or one slice's work in implement |
 | `genie gate <g> --run [--slice <id>]` | Run an automated gate's checks, record the verdict and its evidence |
 | `genie gate <g> --verdict … --by <agent> --findings <file> [--slice <id>]` | Record an agent verdict (the stage or slice author is refused). The findings file is required, pass or fail, and is copied into the run's evidence. |
 | `genie approve <g> [--reject] [--slice <id>]` | Record a human decision (see §4.5) |
 
-`--slice` names the slice for slice gates and implement work. It can be left out when exactly one slice is waiting.
-| `genie abort` | Abort the run |
+| `genie abort` | Abort the run, and remove its worktrees unless that would lose work |
 | `genie hook pre-tool-use` | The enforcement hook (§4.6): reads Claude Code's payload on stdin, prints a deny/ask decision or nothing |
+
+`--slice` names the slice for slice gates and implement work. It can be left out when exactly one slice is waiting.
+
+**Concurrency.** Every state change holds a per-run lock (`state.json.lock`, created exclusively), so parallel subagents recording work and verdicts serialize instead of losing updates. A lock whose holder has exited is taken over; a live one is waited on for up to two minutes. Checks run outside the lock. `genie` finds the run from inside a slice worktree too: the repo root is always the main checkout.
 
 A failed gate sends the run back to its rework stage and resets the gates in between. Once the retry budget is used up, the gate escalates to `needs_human` (or halts). A human rejection sends the work back with a fresh retry budget.
 
 ### Parallel slices
-Each slice runs in its own git worktree, on its own slice branch. Finished slices merge onto the run branch `genie/<run>`, which becomes the PR. `engine/src/worktree.ts` implements this; it isn't wired in yet.
+In orchestrated mode, each slice runs in its own git worktree, on its own slice branch. Finished slices merge onto the run branch `genie/<run>`, which becomes the PR. Guided mode doesn't use worktrees: its single implementer works on the run branch. `engine/src/worktree.ts` does the git; `engine/src/orchestrate.ts` decides when.
 
 | | Name / location |
 |---|---|
@@ -341,10 +345,11 @@ Each slice runs in its own git worktree, on its own slice branch. Finished slice
 - **Where merges happen.** Git won't check a branch out twice, so a slice merges (`--no-ff`, one merge commit per slice) wherever the run branch is already checked out; in guided mode that's usually the user's main checkout. If it isn't checked out anywhere, a dedicated integration worktree is used, leaving the user's checkout alone. On conflict the merge is aborted, and the conflicting files are returned for the orchestrator to route back to the slice's implementer. Both branches are left exactly as they were.
 - **Safety.** Removing a slice refuses, before changing anything, when its worktree has uncommitted (including untracked) changes or its branch has commits not on the run branch, unless forced. Pruning checks every slice first.
 
-Integration points for orchestrated mode:
-- **Dispatch.** When a slice becomes ready, `createSliceWorktree` gives its implementer subagent a working directory. Its `done`/gate calls carry the slice id.
-- **Merging.** After a slice passes `slice.verified` and `slice.reviewed`, `mergeSlice` lands it on the run branch. A `conflict` result routes back to that slice with the file list as feedback.
-- **Cleanup.** After `integrate` passes, or on abort, `pruneRunWorktrees` cleans up (forced on abort).
+How a slice moves through it:
+- **Dispatch.** `genie next` in an orchestrated run creates the run branch from the base if needed, then a worktree for every slice that's ready for work, branched from the run branch's current tip. A slice that depends on others therefore starts with their work. The action carries `worktree {path, branch, base}`.
+- **Work and checks.** `done implement --slice <id>` requires the slice's worktree to be clean and its branch to have commits ahead of the run branch. `gate slice.verified --run` runs the checks in the slice's worktree.
+- **Merging.** A slice with a worktree goes to a `merge` phase, not `passed`, once its gates resolve. After every state change, the engine lands queued slices (plan order, under the run lock). A clean merge records `slice.merged`, removes the slice's worktree and branch, and passes the slice. A conflict sends the slice back to work with `feedback.conflict` listing the files, and its gates are reset; its implementer merges the run branch into the slice branch and resolves it. A merge that can't run at all (for example, uncommitted changes where the run branch is checked out) leaves the slice queued and reports the error on every command until it's cleared.
+- **Cleanup.** Once implement passes, the remaining worktrees (including the integration worktree) are pruned, so later stages run in the main checkout as in guided mode. On abort, pruning is attempted without force: unmerged or uncommitted work is kept, and the abort output says where.
 
 ## 8. Modes in detail
 
@@ -376,13 +381,15 @@ Verified end to end on 2026-10-22:
 - **Hook gating against real run state.** `git push` of the run branch is denied until the `pr` stage. `gh pr merge` is denied until `pr.approved` passes, including at the merge stage while the approval is pending.
 
 ### Orchestrated
-`/genie:run` loops: ask engine for ready work → dispatch subagents (up to `max_parallel_slices`) → evaluate gates → route failures back with findings → repeat. It halts on:
-- a pending `human` gate (notify, then wait for `/genie:approve`),
-- an exhausted retry budget on any gate,
-- a run budget (time/cost/iterations),
-- `/genie:abort`.
+`/genie:run "<intent>"` starts an orchestrated run; `/genie:run` on its own switches the active run to orchestrated (`genie mode orchestrated`). Either way it loads the `genie:orchestrate` skill, which loops:
 
-Modes are switchable mid-run (`/genie:run` on a guided run, or Ctrl-C to drop back to guided).
+1. `genie next --json` returns every ready action and `parallel` (`mode.max_parallel_slices`).
+2. It runs up to `parallel` of them in one message, so they run concurrently: implementer and reviewer subagents (each told to work only in its slice's worktree), and automated gates. Stage work done in the main session (spec, decompose, integrate, pr, merge, deploy, release) is only ever one action at a time.
+3. When the batch returns, back to 1. The engine merges finished slices and routes failures and conflicts back between calls.
+
+It stops when only human gates remain (and says what to review), when the run halts, aborts or finishes, or on an error it can't resolve. It doesn't stop when a stage passes or a gate fails: rework is part of the loop. `/genie:next` still works on an orchestrated run, one action at a time, and `genie mode guided` switches back so new slices are worked on the run branch.
+
+Not yet: run budgets (time, cost, iterations; the `budgets` config is read but not enforced), and letting an agent decide `plan.approved` in orchestrated mode. Both are slice F.
 
 ## 9. Open questions
 1. ~~**Engine language/runtime**~~: **Decided: TypeScript/Node.**
