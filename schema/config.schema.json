@@ -47,6 +47,20 @@
             "human",
             "halt"
           ]
+        },
+        "orchestrated": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/gate"
+            }
+          ],
+          "not": {
+            "type": "object",
+            "required": [
+              "orchestrated"
+            ]
+          },
+          "description": "Overrides that apply while the run is in orchestrated mode, e.g. {kind: human} to keep a human on this gate."
         }
       }
     },
@@ -299,7 +313,8 @@
           "type": "number",
           "exclusiveMinimum": 0
         }
-      }
+      },
+      "description": "Orchestrated-mode safety rails. Exceeding one pauses the run until a human runs /genie:approve budget."
     }
   }
 }

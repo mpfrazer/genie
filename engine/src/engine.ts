@@ -33,6 +33,7 @@ export type Action =
   | { type: 'evaluate'; gate: GateName; kind: 'agent' | 'agent+human'; evaluator?: string; slice?: SliceInfo }
   | { type: 'await_human'; gate: GateName; reason: string; agentReview?: GateState['agentReview']; slice?: SliceInfo }
   | { type: 'halted'; reason: string }
+  | { type: 'over_budget'; reason: string }
   | { type: 'aborted' }
   | { type: 'done' };
 
@@ -62,6 +63,12 @@ function touch(state: RunState, ctx: Ctx): void {
   state.updatedAt = ctx.now;
 }
 
+/** A gate's configuration for this run: orchestrated runs apply the gate's `orchestrated` overrides. */
+export function gateConfig(state: RunState, config: Config, gate: GateName): GateConfig {
+  const { orchestrated, ...base } = config.gates[gate];
+  return state.mode === 'orchestrated' && orchestrated ? { ...base, ...orchestrated } : base;
+}
+
 function isResolved(gs: GateState, gc: GateConfig): boolean {
   return gs.status === 'pass' || gs.status === 'skipped' || (gs.status === 'fail' && !gc.blocking);
 }
@@ -77,7 +84,7 @@ function resolveGates<G extends GateName>(
 ): G | undefined {
   for (const gate of gates) {
     const gs = gateState(gate);
-    const gc = config.gates[gate];
+    const gc = gateConfig(state, config, gate);
     if (gs.status === 'pending' && !gc.enabled) {
       gs.status = 'skipped';
       emit(state, ctx, { type: 'gate.skipped', gate, ...(slice ? { slice } : {}), note: 'disabled by config' });
@@ -169,13 +176,13 @@ export function advance(state: RunState, config: Config, ctx: Ctx): void {
 /** The run-level gate awaiting a verdict, if the run is currently at one. Call after `advance`. */
 export function currentGate(state: RunState, config: Config): RunGateName | undefined {
   if (state.status !== 'active') return undefined;
-  return gatesInPhase(state).find((g) => !isResolved(state.gates[g], config.gates[g]));
+  return gatesInPhase(state).find((g) => !isResolved(state.gates[g], gateConfig(state, config, g)));
 }
 
 /** The slice gate awaiting a verdict for `slice`, if its work is done and a gate is unresolved. */
 export function currentSliceGate(state: RunState, config: Config, slice: SliceState): SliceGateName | undefined {
   if (state.status !== 'active' || state.stage !== 'implement' || slice.phase !== 'exit') return undefined;
-  return SLICE_GATES.find((g) => !isResolved(slice.gates[g], config.gates[g]));
+  return SLICE_GATES.find((g) => !isResolved(slice.gates[g], gateConfig(state, config, g)));
 }
 
 function sliceInfo(slice: SliceState): SliceInfo {
@@ -208,7 +215,7 @@ function sliceAction(state: RunState, config: Config, slice: SliceState): Action
     return { type: 'work', stage: 'implement', instructions: def.instructions, skill: def.skill, agent: def.agent, slice: sliceInfo(slice) };
   }
   const gate = currentSliceGate(state, config, slice);
-  return gate ? gateAction(gate, slice.gates[gate], config.gates[gate], sliceInfo(slice)) : undefined;
+  return gate ? gateAction(gate, slice.gates[gate], gateConfig(state, config, gate), sliceInfo(slice)) : undefined;
 }
 
 /**
@@ -221,6 +228,8 @@ export function nextActions(state: RunState, config: Config): Action[] {
   if (state.status === 'done') return [{ type: 'done' }];
   if (state.status === 'aborted') return [{ type: 'aborted' }];
   if (state.status === 'halted') return [{ type: 'halted', reason: state.haltReason ?? 'halted' }];
+  // Work already under way can still report back, but nothing new starts until a human extends the budget.
+  if (state.budget?.exceeded) return [{ type: 'over_budget', reason: state.budget.exceeded }];
 
   const stage = state.stage;
   if (state.stages[stage].phase === 'work') {
@@ -240,7 +249,7 @@ export function nextActions(state: RunState, config: Config): Action[] {
 
   const gate = currentGate(state, config);
   if (!gate) throw new Error(`run ${state.id} is at ${stage} with nothing to do; call advance() first`);
-  return [gateAction(gate, state.gates[gate], config.gates[gate])];
+  return [gateAction(gate, state.gates[gate], gateConfig(state, config, gate))];
 }
 
 /** The single next action: the first of `nextActions`. */
@@ -299,6 +308,7 @@ function completeSlice(state: RunState, config: Config, by: string, sliceId: str
     throw new GenieError(`slice ${id} depends on ${waiting.join(', ')}, which ${waiting.length === 1 ? "hasn't" : "haven't"} passed yet`);
   }
   slice.author = by;
+  slice.iterations = (slice.iterations ?? 0) + 1;
   slice.phase = 'exit';
   emit(state, ctx, { type: 'slice.work_done', stage: 'implement', slice: id, by });
   touch(state, ctx);
@@ -381,7 +391,7 @@ function judge(gs: GateState, gc: GateConfig, input: VerdictInput, author: strin
 export function recordVerdict(state: RunState, config: Config, input: VerdictInput, ctx: Ctx): void {
   requireActive(state);
   const { gate, verdict, source, by } = input;
-  const gc = config.gates[gate];
+  const gc = gateConfig(state, config, gate);
 
   let gs: GateState;
   let slice: SliceState | undefined;
@@ -397,7 +407,16 @@ export function recordVerdict(state: RunState, config: Config, input: VerdictInp
   }
   const sliceId = slice?.def.id;
   const author = slice ? slice.author : state.stages[stageOfGate(gate)].author;
-  const outcome = judge(gs, gc, input, author, slice ? `slice ${sliceId}` : `stage ${stageOfGate(gate)}`);
+  let outcome = judge(gs, gc, input, author, slice ? `slice ${sliceId}` : `stage ${stageOfGate(gate)}`);
+  // Orchestrated runs cap the rounds of work per slice: past the cap, a failure asks a human instead.
+  const cap = config.budgets.max_iterations_per_slice;
+  const capped = outcome === 'rework' && slice && source !== 'human' && state.mode === 'orchestrated' && (slice.iterations ?? 0) >= cap;
+  if (capped) {
+    gs.status = 'needs_human';
+    outcome = 'escalated';
+  }
+  // A human rejection is a fresh start for the slice, as it is for the gate's retries.
+  if (outcome === 'rework' && slice && source === 'human') slice.iterations = 0;
 
   const logged = {
     gate,
@@ -426,7 +445,9 @@ export function recordVerdict(state: RunState, config: Config, input: VerdictInp
       type: 'gate.escalated',
       gate,
       ...(sliceId ? { slice: sliceId } : {}),
-      note: `failed ${gs.failures} times (retries: ${gc.retries})`,
+      note: capped
+        ? `slice ${sliceId} used its budget of ${cap} rounds of work (budgets.max_iterations_per_slice)`
+        : `failed ${gs.failures} times (retries: ${gc.retries})`,
     });
   } else if (outcome === 'halt') {
     halt(state, `${gate}${sliceId ? ` (slice ${sliceId})` : ''} failed ${gs.failures} times`, ctx);

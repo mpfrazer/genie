@@ -42,13 +42,16 @@ You don't need to do any of this; it's here so you can explain it.
 - **Dispatch.** `GENIE next` creates the run branch if needed, and a worktree for each ready slice under `.genie/worktrees/<run>/<slice>`, branched from the run branch's current tip. A slice that depends on others starts with their work in it.
 - **Merging.** When a slice passes its gates, the engine merges its branch onto the run branch and removes its worktree. If the merge conflicts, the slice goes back to work with `feedback.conflict` listing the files. Its implementer resolves it by merging the run branch into the slice branch, and its gates run again.
 - **Cleanup.** Once implement passes, the remaining worktrees go, and later stages run in the main checkout as in guided mode.
-- **Failures.** A failed gate reworks only that slice or stage. Once a gate's retry budget is used up, it escalates to the user or halts the run.
+- **Failures.** A failed gate reworks only that slice or stage. Once a gate's retry budget is used up, it escalates to the user or halts the run. So does a slice that has used `budgets.max_iterations_per_slice` rounds of work.
+- **The plan.** In orchestrated mode the `plan-reviewer` agent decides `plan.approved` instead of the user, so the run goes straight from the spec approval to implementation unless the reviewer sends the plan back.
+- **Budgets.** Time counts while the run is orchestrated and not waiting on the user. Cost comes from the Claude Code status line, so it's only tracked when the user has genie's status line set up (`/genie:init` offers it).
 
 ## When to stop
 
 Stop and report when:
 
 - **Only human actions remain** (`await_human`). Tell the user what to review for each: artifact paths in the run dir, the PR URL, the slice, and the agent's pre-review if `action.agentReview` is present. Then give the commands: `/genie:approve <gate> [--slice <id>]`, or the same with `--reject --note "why"`. Say that `/genie:run` carries on afterwards.
+- **The run is `over_budget`.** It has used its time or cost budget (`action.reason` says which). Work already running can finish and report, but start nothing new. Tell the user what was spent, and that `/genie:approve budget` grants the configured budget again, or `/genie:abort` stops the run.
 - **The run is `halted`, `aborted`, or `done`.**
 - **`GENIE` returns an error you can't resolve by following its message.** If it's a merge the engine couldn't run (for example, uncommitted changes where the run branch is checked out), report the message: the user has to clear it.
 

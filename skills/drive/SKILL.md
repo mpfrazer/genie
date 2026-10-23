@@ -31,6 +31,7 @@ The engine owns the run. Never edit `.genie/runs/*/state.json`, `log.jsonl`, `CU
    - **`evaluate`, `kind: "automated"`**: run `GENIE gate <gate> [--slice <id>] --run`. Exit code 0 means pass and 2 means not passed; the output says which checks ran.
    - **`evaluate`, `kind: "agent"` or `"agent+human"`**: use the Agent tool with `subagent_type: "genie:<evaluator>"`. The prompt must include the run id, run dir, branch, base, gate name, the slice if present, and `worktree` if present. The evaluator records its own verdict. Never record it on its behalf: the hook only accepts `--by <evaluator>` from that subagent.
    - **`await_human`**: stop (see below).
+   - **`over_budget`**: the run used its time or cost budget while orchestrated (`action.reason`). Report it and stop: `/genie:approve budget` carries on, `/genie:abort` stops the run.
    - **`halted`, `aborted`, `done`**: report and stop.
 3. Go back to step 1 unless a stop condition holds.
 

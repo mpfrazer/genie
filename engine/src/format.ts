@@ -1,6 +1,7 @@
-import type { Action } from './engine.ts';
+import { gateConfig, type Action } from './engine.ts';
 import { SLICE_GATES, STAGE_DEFS, STAGES } from './pipeline.ts';
 import type { Config } from './config/types.ts';
+import { describeBudget } from './budget.ts';
 import { findSlice, type RunState, type SlicePhase, type StagePhase } from './state.ts';
 import type { CheckResult } from './checks.ts';
 
@@ -35,6 +36,8 @@ export function describeAction(action: Action): string {
     }
     case 'halted':
       return `Run halted: ${action.reason}`;
+    case 'over_budget':
+      return `Run paused, over budget: ${action.reason}\n  human: /genie:approve budget to carry on (or /genie:abort)`;
     case 'aborted':
       return 'Run aborted.';
     case 'done':
@@ -50,13 +53,15 @@ export function describeRun(state: RunState, config: Config, action: Action, dir
     const gates = [...STAGE_DEFS[stage].entryGates, ...STAGE_DEFS[stage].exitGates]
       .map((g) => {
         const gs = state.gates[g];
-        const mark = !config.gates[g].enabled && gs.status === 'pending' ? 'off' : gs.status;
+        const mark = !gateConfig(state, config, g).enabled && gs.status === 'pending' ? 'off' : gs.status;
         return `${g}:${mark}${gs.failures ? `(${gs.failures}✗)` : ''}`;
       })
       .join('  ');
     lines.push(`  ${PHASE_MARK[ss.phase]} ${stage.padEnd(10)} ${(current ? ss.phase : '').padEnd(6)} ${gates}`);
     if (stage === 'implement') lines.push(...describeSlices(state, config));
   }
+  const budget = describeBudget(state, config);
+  if (budget) lines.push('', `  ${budget}`);
   lines.push('', describeAction(action));
   return lines.join('\n');
 }
@@ -70,7 +75,7 @@ function describeSlices(state: RunState, config: Config): string[] {
     const phase = slice.phase === 'passed' ? '' : deps.length > 0 ? `waits:${deps.join(',')}` : slice.phase;
     const gates = SLICE_GATES.map((g) => {
       const gs = slice.gates[g];
-      const mark = !config.gates[g].enabled && gs.status === 'pending' ? 'off' : gs.status;
+      const mark = !gateConfig(state, config, g).enabled && gs.status === 'pending' ? 'off' : gs.status;
       return `${g}:${mark}${gs.failures ? `(${gs.failures}✗)` : ''}`;
     }).join('  ');
     const mark = deps.length > 0 ? '·' : SLICE_MARK[slice.phase];
@@ -104,6 +109,8 @@ export function describeStatusline(state: RunState, action: Action): string {
       return `genie ${title} ▸ ${where} · ⏸ /genie:approve ${action.gate}${slice ? ` --slice ${slice}` : ''}`;
     case 'halted':
       return `genie ${title} ▸ halted: ${action.reason}`;
+    case 'over_budget':
+      return `genie ${title} ▸ over budget · ⏸ /genie:approve budget`;
     case 'aborted':
     case 'done':
       return '';

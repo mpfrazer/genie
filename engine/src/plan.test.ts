@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import YAML from 'yaml';
-import { loadPlan, planProblems, requirementIds } from './plan.ts';
+import { loadPlan, planProblems, requirementIds, truncatedProse } from './plan.ts';
 
 const SPEC = '# Spec\n\n- R1: greet by name\n- R2: reject empty names (see R1)\n';
 
@@ -53,6 +53,29 @@ describe('planProblems', () => {
 
   it('skips coverage when the spec numbers no requirements', () => {
     assert.deepEqual(planProblems({ slices: [slice('S1', { covers: ['R3'] })] }, '# spec without ids'), []);
+  });
+});
+
+describe('truncatedProse', () => {
+  it('flags titles, goals and tests that a # comment cut short, and nothing else', () => {
+    const text = [
+      'slices:',
+      '  - id: S1  # branch-safe',
+      '    title: Docs',
+      '    goal: README gets ## modulo sections',
+      '    # a full-line comment is fine',
+      '    covers: [R1] # so is this',
+      '    tests:',
+      '      - has ## headings',
+      '      - "quoted ## is fine"',
+      '      - fine',
+      '    depends_on: []',
+    ].join('\n');
+    assert.deepEqual(truncatedProse(text), [
+      '/slices/0/goal: a "#" starts a YAML comment here, cutting the text short; quote the value',
+      '/slices/0/tests/0: a "#" starts a YAML comment here, cutting the text short; quote the value',
+    ]);
+    assert.deepEqual(truncatedProse('slices: nope'), []);
   });
 });
 

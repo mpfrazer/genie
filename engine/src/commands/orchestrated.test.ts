@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -64,6 +64,14 @@ function review(root: string, dir: string, slice: string) {
   return ok(root, ['gate', 'slice.reviewed', '--slice', slice, '--verdict', 'pass', '--by', 'adversarial-reviewer', '--findings', findings]);
 }
 
+/** Orchestrated runs have the plan-reviewer agent decide plan.approved. */
+function planReview(root: string, dir: string) {
+  const findings = join(dir, 'review', 'plan.approved.md');
+  mkdirSync(join(dir, 'review'), { recursive: true });
+  writeFileSync(findings, 'The slices cover R1-R3 and the DAG is sound.');
+  return ok(root, ['gate', 'plan.approved', '--verdict', 'pass', '--by', 'plan-reviewer', '--findings', findings]);
+}
+
 describe('orchestrated run through the CLI', () => {
   it('runs ready slices in parallel worktrees, merges them, and routes conflicts back', async () => {
     const root = repo();
@@ -81,7 +89,9 @@ describe('orchestrated run through the CLI', () => {
     });
     writeFileSync(join(dir, 'plan.yaml'), JSON.stringify({ slices: [slice('S1', 'R1'), slice('S2', 'R2'), slice('S3', 'R3', ['S1', 'S2'])] }));
     ok(root, ['done', 'decompose']);
-    ok(root, ['approve', 'plan.approved']);
+    assert.deepEqual(nextJson(root).action, { type: 'evaluate', gate: 'plan.approved', kind: 'agent', evaluator: 'plan-reviewer' });
+    assert.notEqual(genie(root, root, ['approve', 'plan.approved']).status, 0, 'an agent gate in orchestrated mode');
+    planReview(root, dir);
 
     // S1 and S2 are independent: both are dispatched, each in its own worktree off the run branch.
     view = nextJson(root);
@@ -172,12 +182,59 @@ describe('orchestrated run through the CLI', () => {
     ok(root, ['approve', 'spec.approved']);
     writeFileSync(join(dir, 'plan.yaml'), JSON.stringify({ slices: [{ id: 'S1', title: 'One', goal: 'g', covers: ['R1'], tests: ['t'], depends_on: [] }] }));
     ok(root, ['done', 'decompose']);
-    ok(root, ['approve', 'plan.approved']);
+    planReview(root, dir);
     const wt = nextJson(root).worktree;
     commit(wt.path, 'one.txt', '1\n', 'feat: one');
 
     const aborted = ok(root, ['abort', '--note', 'changed my mind']);
     assert.match(aborted, /note: kept the run's worktrees in .*has commits not merged/);
     assert.ok(existsSync(join(wt.path, 'one.txt')), 'unmerged work is never deleted');
+  });
+
+  it('escalates a slice past its iteration budget, and pauses the run when the status line reports it over its cost budget', () => {
+    const root = repo();
+    ok(root, ['init', '--profile', 'internal-tool']);
+    appendFileSync(join(root, '.genie', 'config.yaml'), 'budgets:\n  max_iterations_per_slice: 1\n  max_cost_usd: 5\n');
+    ok(root, ['new', '--mode', 'orchestrated', 'One part']);
+    const dir = nextJson(root).run.dir;
+    writeFileSync(join(dir, 'spec.md'), '# spec\n\n- R1: one\n');
+    ok(root, ['done', 'spec']);
+    ok(root, ['approve', 'spec.approved']);
+    writeFileSync(join(dir, 'plan.yaml'), JSON.stringify({ slices: [{ id: 'S1', title: 'One', goal: 'g', covers: ['R1'], tests: ['t'], depends_on: [] }] }));
+    ok(root, ['done', 'decompose']);
+    planReview(root, dir);
+
+    // The first round fails its checks, and that was the slice's only round: a human decides.
+    const wt = nextJson(root).worktree;
+    commit(wt.path, 'broken', 'x\n', 'feat: one, broken');
+    ok(root, ['done', 'implement', '--slice', 'S1', '--by', 'implementer'], wt.path);
+    assert.equal(genie(root, root, ['gate', 'slice.verified', '--slice', 'S1', '--run']).status, 2);
+    let view = nextJson(root);
+    assert.equal(view.action.type, 'await_human');
+    assert.equal(view.action.gate, 'slice.verified');
+    const log = readFileSync(join(dir, 'log.jsonl'), 'utf8');
+    assert.match(log, /slice S1 used its budget of 1 rounds of work/);
+
+    // A human rejection gives the slice a fresh budget.
+    ok(root, ['approve', 'slice.verified', '--slice', 'S1', '--reject', '--note', 'try again']);
+    assert.equal(nextJson(root).action.type, 'work');
+
+    // Cost arrives through the status line; over the limit, nothing new starts until a human says so.
+    const status = (usd: number) =>
+      spawnSync('node', [CLI, 'statusline'], {
+        cwd: tmpdir(),
+        encoding: 'utf8',
+        env: env(root),
+        input: JSON.stringify({ workspace: { current_dir: root }, session_id: 'sess-1', cost: { total_cost_usd: usd } }),
+      }).stdout;
+    assert.match(status(2), /implement\/work S1/);
+    assert.match(status(6.5), /over budget · ⏸ \/genie:approve budget/);
+    view = nextJson(root);
+    assert.deepEqual(view.action, { type: 'over_budget', reason: 'spent $6.50, over the $5.00 budget' });
+    assert.match(ok(root, ['status']), /budget: \dm of 4h · \$6\.50 of \$5\.00 · paused/);
+    assert.match(genie(root, root, ['approve', 'budget', '--reject']).stderr, /abort it/);
+    ok(root, ['approve', 'budget']);
+    assert.equal(nextJson(root).action.type, 'work');
+    assert.match(readFileSync(join(dir, 'log.jsonl'), 'utf8'), /"type":"budget.extended","by":"human"/);
   });
 });

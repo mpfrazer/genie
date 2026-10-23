@@ -37,6 +37,8 @@ export interface SliceState {
   phase: SlicePhase;
   /** Who did the slice's work; they may not evaluate its gates. */
   author?: string;
+  /** Rounds of work completed, counted against `budgets.max_iterations_per_slice`. */
+  iterations?: number;
   /** On fix-up slices: the run-level gate whose failure sent the run back to implement. */
   fixes?: RunGateName;
   /** Orchestrated mode: the slice's own worktree and branch, while they exist. */
@@ -61,8 +63,25 @@ export interface RunState {
   updatedAt: string;
   stages: Record<StageName, StageState>;
   gates: Record<RunGateName, GateState>;
+  /** Orchestrated-mode budget accounting; absent until the run's first orchestrated step. */
+  budget?: BudgetState;
   /** The plan's slices in plan order, followed by any fix-up slices. Empty until `done decompose`. */
   slices: SliceState[];
+}
+
+export interface BudgetState {
+  /** Time spent orchestrated and not waiting on a human, in milliseconds. */
+  activeMs: number;
+  /** When `activeMs` was last brought up to date. */
+  tickedAt: string;
+  /** Cost charged to the run, in USD. */
+  costUsd: number;
+  /** The last cumulative cost reported for each Claude Code session, so each report charges only its increase. */
+  sessions: Record<string, number>;
+  /** Times a human extended the budget; each adds the configured limits again. */
+  extensions: number;
+  /** Set while the run is paused for exceeding a limit: which one, and by how much. */
+  exceeded?: string;
 }
 
 export interface NewRun {

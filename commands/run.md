@@ -16,7 +16,7 @@ Run genie in orchestrated mode.
    GENIE_INTENT
    ```
 
-   If a run is already active, show `node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs" status` and ask whether to continue it or abort it. Never abort a run on your own.
+   Run this first, without checking status beforehand: a finished run doesn't stop a new one, and `new` itself refuses when a run is still active or halted. Only if it refuses, show `node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs" status` and ask whether to continue that run or abort it. Never abort a run on your own.
 2. Otherwise, switch the active run to orchestrated mode:
 
    ```

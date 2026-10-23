@@ -90,6 +90,7 @@ slices:
 
 `genie done decompose` validates it and reports every problem at once:
 - the schema
+- no title, goal, or test cut short by a ` #` that YAML read as a comment
 - unique ids, and dependencies that exist and aren't self-references
 - no dependency cycles (reported as a path, e.g. `A → C → B → A`)
 - every requirement id (`R<n>`) in spec.md covered by some slice, and no slice covering an id spec.md doesn't have (skipped if the spec numbers no requirements)
@@ -242,11 +243,22 @@ enforcement:                  # PreToolUse hook (§4.6)
   protect_base_branch: true
   outside_run: allow          # allow | deny outward actions with no active run
 
-budgets:                      # orchestrated-mode safety rails
+budgets:                      # orchestrated-mode safety rails (§8)
   max_iterations_per_slice: 5
   max_run_duration: 4h
   max_cost_usd: 50
 ```
+
+**Per-mode gate settings.** A gate's `orchestrated:` block overrides its other settings while the run is in orchestrated mode. The default uses this for `plan.approved`, which a human decides in guided mode and the `plan-reviewer` agent decides in orchestrated mode:
+
+```yaml
+gates:
+  plan.approved:
+    kind: human
+    orchestrated: { kind: agent, evaluator: plan-reviewer, retries: 2 }
+```
+
+To keep a human on the plan in orchestrated runs too, set `gates.plan.approved.orchestrated.kind: human` (or `agent+human`, to get the reviewer's verdict first). Setting `kind` alone changes only guided mode.
 
 ### Built-in profiles
 The Deploy and Release columns are **stages**; the other columns are gates. `genie init` also disables the deploy stage until `deploy.command` is set.
@@ -264,7 +276,7 @@ The Deploy and Release columns are **stages**; the other columns are gates. `gen
 |---|---|
 | **Slash commands** | Built: `/genie:init`, `/genie:new <intent>`, `/genie:next` (guided step), `/genie:status`, `/genie:approve <gate>`, `/genie:abort`. The last two are user-only: `disable-model-invocation`, and the hook denies the model running `genie approve` / `genie abort`. Planned: `/genie:run` (orchestrate). |
 | **Skills** | The stage playbooks (`spec`, `decompose`, `implement`, `review`, `pr`, `release`). They are loaded on demand so each stage gets precise instructions without bloating context. |
-| **Subagents** | `spec-writer`, `decomposer`, `implementer`, `adversarial-reviewer`, `intent-reviewer`, `integrator`, `release-manager`. Each has scoped tools. Reviewers are read-only. |
+| **Subagents** | `spec-writer`, `decomposer`, `implementer`, `plan-reviewer`, `adversarial-reviewer`, `intent-reviewer`, `integrator`, `release-manager`. Each has scoped tools. Reviewers are read-only. |
 | **Hooks** | Enforcement: `PreToolUse` blocks `git push`, `gh pr merge`, and deploy/release commands without a passing gate. `SessionStart` loads active-run context. `Stop`/`SubagentStop` record stage completion. |
 | **State / engine** | See §7. |
 | **Status line** | Plugins can't ship the main status line; only user/project `settings.json` can set it. `/genie:init` offers to add `statusLine` to `.claude/settings.local.json`, which is machine-local because the plugin path is absolute. It runs `genie statusline`, which reads Claude Code's payload (`workspace.current_dir`) and prints e.g. `genie Add a greeting ▸ spec/exit · ⏸ /genie:approve spec.approved`. It prints nothing without an active run, and never fails. `/genie:init --statusline` repairs the path after a plugin update. |
@@ -389,7 +401,19 @@ Verified end to end on 2026-10-22:
 
 It stops when only human gates remain (and says what to review), when the run halts, aborts or finishes, or on an error it can't resolve. It doesn't stop when a stage passes or a gate fails: rework is part of the loop. `/genie:next` still works on an orchestrated run, one action at a time, and `genie mode guided` switches back so new slices are worked on the run branch.
 
-Not yet: run budgets (time, cost, iterations; the `budgets` config is read but not enforced), and letting an agent decide `plan.approved` in orchestrated mode. Both are slice F.
+**The plan.** `plan.approved` goes to the `plan-reviewer` agent (§5, per-mode gate settings). It checks what the engine's plan validation can't: that slices deliver what they claim to cover, that slices with no dependency between them won't change the same code (they'd conflict when they merge), that the dependencies are real, and that the sizing and tests are reasonable. A fail sends the run back to decompose with its findings. After two failed retries, or a `needs_human` verdict, the plan goes to the user.
+
+**Budgets.** `budgets:` limits what an orchestrated run does without the user:
+
+| Budget | Counts | When used up |
+|---|---|---|
+| `max_iterations_per_slice` | Rounds of work on a slice (each `done implement`). A human rejection resets it. | The slice's next gate failure escalates to the user instead of going back to work. Other slices carry on. |
+| `max_run_duration` | Time the run spends in orchestrated mode with work to do. Time waiting on a human gate, paused, or in guided mode doesn't count. The engine charges the gap between consecutive state changes, so a session that dies mid-run is charged until the next one starts. | The run pauses. |
+| `max_cost_usd` | Session cost as Claude Code reports it to the status line (`cost.total_cost_usd`, which includes subagents), charged by its increase while the run has work to do. | The run pauses. |
+
+A paused run's `next` action is `over_budget`: work already under way can still record its results, but nothing new starts. `/genie:approve budget` grants the configured limits again on top of what's been spent, and `/genie:abort` stops the run. The pause holds in both modes, and only the user can lift it: the hook denies the model `genie approve`.
+
+Cost is only as good as its source. Claude Code reports a session's cost only to the status line, so cost is tracked only in interactive sessions with genie's status line set up (`/genie:init` offers it). For headless runs, use `claude -p --max-budget-usd`. The figures are Claude Code's client-side estimates at list price.
 
 ## 9. Open questions
 1. ~~**Engine language/runtime**~~: **Decided: TypeScript/Node.**
