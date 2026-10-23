@@ -6,7 +6,7 @@ genie gives every repo the same gated lifecycle, run either step by step (guided
 See [docs/SPEC.md](docs/SPEC.md) for the design.
 
 ## Status
-Walking skeleton. The deterministic engine (`engine/`) and `/genie:init` work today. The other slash commands, the subagents, and gate-enforcing hooks are next.
+Walking skeleton. Working today: the deterministic engine (`engine/`), `/genie:init`, `/genie:approve` (human-only), and the PreToolUse hook that enforces gates. The run commands (`/genie:new`, `/genie:next`, `/genie:status`) and the subagents are next.
 
 ## Development
 ```sh

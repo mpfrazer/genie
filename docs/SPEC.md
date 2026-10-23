@@ -112,9 +112,41 @@ These are deliberately separate. Turning off `release.approved` would mean *rele
 
 ### 4.5 The human approval channel
 `genie approve` is the only way a human gate is satisfied, so it must be unreachable by the model:
-- `/genie:approve` is a slash command with `disable-model-invocation: true` that runs the CLI through `!` pre-execution, not through the Bash tool.
-- A `PreToolUse` hook denies any Bash tool call that invokes `genie approve`.
-- **To verify:** Claude Code documents PreToolUse as firing "only when Claude calls a tool". We still need to confirm it does not fire for `!` pre-execution (or the approve command blocks itself).
+- `/genie:approve` is a slash command with `disable-model-invocation: true`. It runs the CLI through `!` pre-execution, not through the Bash tool.
+- The PreToolUse hook (§4.6) denies any Bash tool call that invokes `genie approve`, including through `sh -c`, `eval`, `env`, or a `node …/genie.mjs` path.
+
+Verified against Claude Code with a probe plugin and the real plugin (2026-10-22):
+
+| Behavior | Result |
+|---|---|
+| PreToolUse fires for a slash command's `!` pre-execution | **No**: only UserPromptSubmit fires. `/genie:approve` therefore isn't blocked by the hook that blocks the model. |
+| `disable-model-invocation: true` stops the model invoking the command | **Yes**: the Skill tool rejects it. |
+| UserPromptSubmit as an approval channel | **Rejected**: it also fires for system task notifications, so it isn't human-only. |
+| `!` commands containing a raw `$VAR` | **Refused** before running ("can't be checked before it runs"). Use the substituted `${CLAUDE_PLUGIN_ROOT}` placeholder instead. |
+| Subagent identity in hook input | `agent_type` is the namespaced agent name (e.g. `genie:adversarial-reviewer`). It is absent in the main session. |
+
+Not yet verified: whether PreToolUse fires for user-typed `! cmd` bash-mode commands. This can only be tested interactively.
+
+### 4.6 Enforcement hook
+`hooks/hooks.json` runs `genie hook pre-tool-use` before every `Bash`, `Write`, `Edit`, `MultiEdit`, and `NotebookEdit` call. The hook reads the command and splits it into simple commands, seeing through `&&`, `;`, pipes, `$(…)`, backticks, `sh -c`, `eval`, `env`/`sudo` wrappers, and `git -C`. It then classifies each one:
+
+| Action | Recognized as | Rule |
+|---|---|---|
+| Approve | `genie approve …` | Always denied: the model can't satisfy human gates. |
+| Record | `genie gate … --verdict`, `genie done` | `--by` must equal the caller: the subagent's name, or `claude` for the main session. Authors can't impersonate reviewers. |
+| State write | writes/redirects to `.genie/runs/{CURRENT,<id>,<id>/state.json,log.jsonl,evidence}` | Always denied. Stage artifacts (`spec.md`, `plan.md`) stay writable. |
+| Config write | writes to `.genie/config.yaml` | **Ask**: the user confirms, because it changes which gates apply. |
+| Push to base | `git push` that updates `forge.base_branch` (explicitly, implicitly from it, `--all`/`--mirror`, delete) | Denied when `enforcement.protect_base_branch` (default on). |
+| Push / open PR | `git push`, `gh pr create`, `glab mr create` | Allowed once the run reaches `pr`. |
+| Merge | `gh pr merge`, `glab mr merge` | Allowed once `merge`'s entry gate (`pr.approved`) passes. |
+| Deploy | commands starting with `deploy.command` | Allowed once `deploy.approved` passes. |
+| Release | `git tag <name>`, pushing tags, `gh release create/edit/upload/delete`, `npm`/`pnpm`/`yarn`/`bun`/`cargo publish`, `gem push`, `twine upload`, `release.publish` | Allowed once `release.approved` passes. |
+
+Outside an active run, outward actions are allowed unless `enforcement.outside_run: deny`. In repos without `.genie/config.yaml`, the hook does nothing. `enforcement.enabled: false` turns off the progress gating but never the first four rows.
+
+Failure handling: if the config or run state can't be read while a protected action is being judged, the hook **fails closed** (deny, with the error). If the hook payload itself is unreadable, or the engine has a bug, the hook **fails open** with a stderr warning, so a broken hook never wedges the session.
+
+**Known limits (defense in depth, not a sandbox):** the model runs with the user's OS permissions. Indirect execution the hook can't see (a script file that calls `genie approve`, an interpreter one-liner that writes `state.json`, a variable holding the command) gets past it. The append-only log plus `by`/`source` on every verdict keeps such tampering visible. Hardening options for later: sign verdicts with a key the hook process holds, and have the engine verify the log against the state.
 
 ## 5. Per-repo configuration
 
@@ -166,6 +198,11 @@ release:
   versioning: semver          # semver | calver | none
   changelog: conventional-commits
   publish: npm publish
+
+enforcement:                  # PreToolUse hook (§4.6)
+  enabled: true               # gate push/PR/merge/deploy/release on run progress
+  protect_base_branch: true
+  outside_run: allow          # allow | deny outward actions with no active run
 
 budgets:                      # orchestrated-mode safety rails
   max_iterations_per_slice: 5
@@ -246,6 +283,7 @@ Each command prints text by default; pass `--json` for output Claude can parse.
 | `genie gate <g> --verdict … --by <agent>` | Record an agent verdict (the stage author is refused) |
 | `genie approve <g> [--reject]` | Record a human decision (see §4.5) |
 | `genie abort` | Abort the run |
+| `genie hook pre-tool-use` | The enforcement hook (§4.6): reads Claude Code's payload on stdin, prints a deny/ask decision or nothing |
 
 A failed gate sends the run back to its rework stage and resets the gates in between. Once the retry budget is used up, the gate escalates to `needs_human` (or halts). A human rejection sends the work back with a fresh retry budget.
 

@@ -49,6 +49,7 @@ export function defaultConfig(): Config {
     },
     deploy: { environments: ['staging', 'production'] },
     release: { versioning: 'semver', changelog: 'conventional-commits' },
+    enforcement: { enabled: true, protect_base_branch: true, outside_run: 'allow' },
     budgets: { max_iterations_per_slice: 5, max_run_duration: '4h', max_cost_usd: 50 },
   };
 }
