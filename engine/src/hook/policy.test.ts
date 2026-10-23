@@ -36,7 +36,7 @@ function check(
 /** A run advanced to the given stage's work phase, with every earlier gate passed. */
 function runAt(stage: 'implement' | 'pr' | 'merge', cfg = config()): RunState {
   const ctx: Ctx = { now: '2026-10-22T00:00:00.000Z', events: [] };
-  const run = newRunState('r1', 'test', 'guided', ctx.now);
+  const run = newRunState({ id: 'r1', title: 'test', mode: 'guided', branch: 'genie/r1', base: 'main' }, ctx.now);
   advance(run, cfg, ctx);
   const human = (gate: Parameters<typeof recordVerdict>[2]['gate']) =>
     recordVerdict(run, cfg, { gate, verdict: 'pass', source: 'human', by: 'human' }, ctx);

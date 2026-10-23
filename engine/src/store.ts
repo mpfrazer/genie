@@ -54,7 +54,7 @@ export function setCurrentRun(root: string, id: string): void {
 
 export function loadRun(root: string, id?: string): RunState {
   const runId = id ?? currentRunId(root);
-  if (!runId) throw new GenieError('no active run (start one with `genie new "<intent>"`)');
+  if (!runId) throw new GenieError('no active run (start one with /genie:new or `genie new "<intent>"`)');
   const path = join(runDir(root, runId), 'state.json');
   if (!existsSync(path)) throw new GenieError(`run ${runId} not found`);
   return JSON.parse(readFileSync(path, 'utf8')) as RunState;

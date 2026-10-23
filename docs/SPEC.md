@@ -224,7 +224,7 @@ The Deploy and Release columns are **stages**; the other columns are gates. `gen
 
 | Primitive | Use in genie |
 |---|---|
-| **Slash commands** | `/genie:init`, `/genie:new <intent>`, `/genie:status`, `/genie:next` (guided step), `/genie:run` (orchestrate), `/genie:approve <gate>`, `/genie:resume`, `/genie:abort` |
+| **Slash commands** | Built: `/genie:init`, `/genie:new <intent>`, `/genie:next` (guided step), `/genie:status`, `/genie:approve <gate>`. Planned: `/genie:run` (orchestrate), `/genie:abort`. |
 | **Skills** | The stage playbooks (`spec`, `decompose`, `implement`, `review`, `pr`, `release`). They are loaded on demand so each stage gets precise instructions without bloating context. |
 | **Subagents** | `spec-writer`, `decomposer`, `implementer`, `adversarial-reviewer`, `intent-reviewer`, `integrator`, `release-manager`. Each has scoped tools. Reviewers are read-only. |
 | **Hooks** | Enforcement: `PreToolUse` blocks `git push`, `gh pr merge`, and deploy/release commands without a passing gate. `SessionStart` loads active-run context. `Stop`/`SubagentStop` record stage completion. |
@@ -293,6 +293,19 @@ Parallel slices: each slice runs in its own git worktree on branch `genie/<run>/
 
 ### Guided
 `/genie:next` advances exactly one stage, shows the artifact, and stops. Slices run sequentially by default. The human can edit any artifact on disk before continuing, and genie re-reads from disk.
+
+How it works:
+- **Commands.** `/genie:new` (create the run, then drive) and `/genie:next` (drive) both load the `genie:drive` skill. It loops on `genie next --json`, which returns the run context, the action, and `feedback` (the failed verdict and its evidence) when a stage is being reworked.
+- **Who does each stage's work.**
+  - Main-session stages load their playbook skill: `genie:spec`, `decompose`, `integrate`, `pr`, `merge`, `deploy`, `release`.
+  - `implement` is delegated to the `implementer` subagent.
+  - Agent gates are delegated to their evaluator (`adversarial-reviewer`, `intent-reviewer`). Each subagent records `done` or its verdict itself, and the hook binds `--by` to the caller.
+  - The main session never does a delegated stage's work. If a subagent is blocked, the driver stops and reports. The next delegation resumes from the run branch.
+- **Where the driver stops.** At a human gate, after a gate failure (with a summary of why), when the stage it started on passes, or on an error.
+- **Run branches.** Each run records `branch` (`forge.branch_prefix` + run id) and `base`. `genie done` refuses `implement` and `integrate` unless the work is committed on the run branch, ahead of the base.
+- **CI gate.** `pr.ready` runs `forge.ci_command`. `genie init` sets it to `gh pr checks --watch --interval 15` for GitHub repos.
+
+Verified end to end on 2026-10-22: six separate headless Claude Code sessions took a scratch repo from intent through spec, plan, implementation, verification, adversarial review, and integration. State resumed from disk each time, and the audit log attributed each step correctly.
 
 ### Orchestrated
 `/genie:run` loops: ask engine for ready work → dispatch subagents (up to `max_parallel_slices`) → evaluate gates → route failures back with findings → repeat. It halts on:

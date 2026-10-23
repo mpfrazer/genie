@@ -38,6 +38,12 @@ export interface StageDef {
   artifact?: string;
   /** Short instruction handed to whoever performs the stage's work. */
   instructions: string;
+  /** Plugin skill holding the stage playbook, for work done in the main session. */
+  skill?: string;
+  /** Subagent that performs the work instead of the main session. */
+  agent?: string;
+  /** Work must be committed on the run branch, ahead of the base branch, before it counts as done. */
+  onRunBranch?: boolean;
   /** Gates that must resolve before work starts (e.g. approval to deploy). */
   entryGates: GateName[];
   /** Gates that must resolve before the stage passes. */
@@ -58,6 +64,7 @@ export const STAGE_DEFS: Record<StageName, StageDef> = {
     artifact: 'spec.md',
     instructions:
       'Elaborate intent.md into spec.md: requirements, acceptance criteria, constraints, non-goals, risks.',
+    skill: 'genie:spec',
     entryGates: [],
     exitGates: ['spec.approved'],
   },
@@ -67,6 +74,7 @@ export const STAGE_DEFS: Record<StageName, StageDef> = {
     artifact: 'plan.md',
     instructions:
       'Decompose spec.md into independently implementable, testable slices with dependencies, written to plan.md.',
+    skill: 'genie:decompose',
     entryGates: [],
     exitGates: ['plan.approved'],
   },
@@ -74,7 +82,9 @@ export const STAGE_DEFS: Record<StageName, StageDef> = {
   implement: {
     name: 'implement',
     hasWork: true,
-    instructions: 'Implement the slices in plan.md, with tests, in the working tree.',
+    instructions: 'Implement the slices in plan.md, with tests, committed on the run branch.',
+    agent: 'implementer',
+    onRunBranch: true,
     entryGates: [],
     exitGates: ['slice.verified', 'slice.reviewed'],
   },
@@ -82,6 +92,8 @@ export const STAGE_DEFS: Record<StageName, StageDef> = {
     name: 'integrate',
     hasWork: true,
     instructions: 'Integrate completed slices onto the run branch and resolve conflicts.',
+    skill: 'genie:integrate',
+    onRunBranch: true,
     entryGates: [],
     exitGates: ['integration.verified'],
   },
@@ -89,6 +101,7 @@ export const STAGE_DEFS: Record<StageName, StageDef> = {
     name: 'pr',
     hasWork: true,
     instructions: 'Push the run branch and open a pull request with a generated description.',
+    skill: 'genie:pr',
     entryGates: [],
     exitGates: ['pr.ready', 'intent.reviewed'],
   },
@@ -96,6 +109,7 @@ export const STAGE_DEFS: Record<StageName, StageDef> = {
     name: 'merge',
     hasWork: true,
     instructions: 'Merge the approved pull request into the base branch.',
+    skill: 'genie:merge',
     entryGates: ['pr.approved'],
     exitGates: [],
   },
@@ -110,6 +124,7 @@ export const STAGE_DEFS: Record<StageName, StageDef> = {
     name: 'deploy',
     hasWork: true,
     instructions: 'Deploy using deploy.command for each configured environment.',
+    skill: 'genie:deploy',
     entryGates: ['deploy.approved'],
     exitGates: ['deploy.healthy'],
   },
@@ -117,6 +132,7 @@ export const STAGE_DEFS: Record<StageName, StageDef> = {
     name: 'release',
     hasWork: true,
     instructions: 'Version, write the changelog, tag, and publish.',
+    skill: 'genie:release',
     entryGates: ['release.approved'],
     exitGates: [],
   },

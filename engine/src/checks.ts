@@ -30,6 +30,12 @@ export function resolveCheck(config: Config, check: string): string | undefined 
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
+/** A check command, once per deploy environment if it mentions `{env}`. */
+function expand(config: Config, command: string): { suffix: string; command: string }[] {
+  if (!command.includes('{env}')) return [{ suffix: '', command }];
+  return config.deploy.environments.map((env) => ({ suffix: `-${env}`, command: command.replaceAll('{env}', env) }));
+}
+
 /**
  * Runs each configured check in order, stopping at the first failure.
  * Checks with no command configured are skipped; if none are configured at all,
@@ -49,13 +55,20 @@ export function runChecks(
       results.push({ check, status: 'missing' });
       continue;
     }
-    const started = Date.now();
-    const res = spawnSync('sh', ['-c', command], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-    const log = join(evidenceDir, `${evidencePrefix}.${check.replaceAll('.', '-')}.log`);
-    writeAtomic(log, `$ ${command}\n${res.stdout ?? ''}${res.stderr ?? ''}${res.error ? `\n${res.error.message}\n` : ''}`);
-    const status = res.status === 0 ? 'pass' : 'fail';
-    results.push({ check, command, status, exitCode: res.status, durationMs: Date.now() - started, log });
-    if (status === 'fail') break;
+    let failed = false;
+    for (const run of expand(config, command)) {
+      const started = Date.now();
+      const res = spawnSync('sh', ['-c', run.command], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+      const log = join(evidenceDir, `${evidencePrefix}.${check.replaceAll('.', '-')}${run.suffix}.log`);
+      writeAtomic(log, `$ ${run.command}\n${res.stdout ?? ''}${res.stderr ?? ''}${res.error ? `\n${res.error.message}\n` : ''}`);
+      const status = res.status === 0 ? 'pass' : 'fail';
+      results.push({ check, command: run.command, status, exitCode: res.status, durationMs: Date.now() - started, log });
+      if (status === 'fail') {
+        failed = true;
+        break;
+      }
+    }
+    if (failed) break;
   }
 
   const ran = results.filter((r) => r.status !== 'missing');

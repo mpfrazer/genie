@@ -13,7 +13,7 @@ export interface Ctx {
 export type VerdictSource = 'automated' | 'agent' | 'human';
 
 export type Action =
-  | { type: 'work'; stage: StageName; instructions: string; artifact?: string }
+  | { type: 'work'; stage: StageName; instructions: string; artifact?: string; skill?: string; agent?: string }
   | { type: 'evaluate'; gate: GateName; kind: 'automated'; checks: string[] }
   | { type: 'evaluate'; gate: GateName; kind: 'agent' | 'agent+human'; evaluator?: string }
   | { type: 'await_human'; gate: GateName; reason: string; agentReview?: GateState['agentReview'] }
@@ -123,7 +123,7 @@ export function nextAction(state: RunState, config: Config): Action {
   const stage = state.stage;
   if (state.stages[stage].phase === 'work') {
     const def = STAGE_DEFS[stage];
-    return { type: 'work', stage, instructions: def.instructions, artifact: def.artifact };
+    return { type: 'work', stage, instructions: def.instructions, artifact: def.artifact, skill: def.skill, agent: def.agent };
   }
 
   const gate = currentGate(state, config);

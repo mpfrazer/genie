@@ -39,7 +39,7 @@ export function defaultConfig(): Config {
       'slice.verified': automated(VERIFY_CHECKS, 3),
       'slice.reviewed': agent('adversarial-reviewer', 3),
       'integration.verified': automated(VERIFY_CHECKS, 2),
-      'pr.ready': automated([], 2),
+      'pr.ready': automated(['forge.ci_command'], 2),
       'intent.reviewed': agent('intent-reviewer', 1),
       'pr.approved': human(),
       'build.passed': automated(['commands.build'], 0),
