@@ -1,0 +1,279 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "genie configuration",
+  "description": "A single layer of genie config (.genie/config.yaml or ~/.genie/config.yaml). Every field is optional; layers merge over built-in defaults.",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Disabled gates are skipped, and the skip is logged."
+        },
+        "kind": {
+          "enum": [
+            "automated",
+            "agent",
+            "human",
+            "agent+human"
+          ]
+        },
+        "evaluator": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Subagent that evaluates agent gates."
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z_]+\\.[a-z_]+$"
+          },
+          "description": "Dotted config paths (e.g. commands.test) to run for automated gates."
+        },
+        "blocking": {
+          "type": "boolean",
+          "description": "Advisory (non-blocking) gates record failures without stopping the run."
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "escalate_to": {
+          "enum": [
+            "human",
+            "halt"
+          ]
+        }
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "const": 1
+    },
+    "profile": {
+      "enum": [
+        "prototype",
+        "internal-tool",
+        "service",
+        "library"
+      ]
+    },
+    "mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "enum": [
+            "guided",
+            "orchestrated"
+          ]
+        },
+        "max_parallel_slices": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "commands": {
+      "type": "object",
+      "description": "Shell commands genie uses to verify the repo. Well-known keys: install, build, lint, typecheck, test, test_changed.",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "pattern": "^[a-z_]+$"
+      }
+    },
+    "forge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "github",
+            "gitlab",
+            "none"
+          ]
+        },
+        "base_branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "branch_prefix": {
+          "type": "string"
+        },
+        "pr_draft_until": {
+          "enum": [
+            "spec.approved",
+            "plan.approved",
+            "slice.verified",
+            "slice.reviewed",
+            "integration.verified",
+            "pr.ready",
+            "intent.reviewed",
+            "pr.approved",
+            "build.passed",
+            "deploy.approved",
+            "deploy.healthy",
+            "release.approved"
+          ]
+        }
+      }
+    },
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spec": {
+          "$ref": "#/definitions/stage"
+        },
+        "decompose": {
+          "$ref": "#/definitions/stage"
+        },
+        "implement": {
+          "$ref": "#/definitions/stage"
+        },
+        "integrate": {
+          "$ref": "#/definitions/stage"
+        },
+        "pr": {
+          "$ref": "#/definitions/stage"
+        },
+        "merge": {
+          "$ref": "#/definitions/stage"
+        },
+        "build": {
+          "$ref": "#/definitions/stage"
+        },
+        "deploy": {
+          "$ref": "#/definitions/stage"
+        },
+        "release": {
+          "$ref": "#/definitions/stage"
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spec.approved": {
+          "$ref": "#/definitions/gate"
+        },
+        "plan.approved": {
+          "$ref": "#/definitions/gate"
+        },
+        "slice.verified": {
+          "$ref": "#/definitions/gate"
+        },
+        "slice.reviewed": {
+          "$ref": "#/definitions/gate"
+        },
+        "integration.verified": {
+          "$ref": "#/definitions/gate"
+        },
+        "pr.ready": {
+          "$ref": "#/definitions/gate"
+        },
+        "intent.reviewed": {
+          "$ref": "#/definitions/gate"
+        },
+        "pr.approved": {
+          "$ref": "#/definitions/gate"
+        },
+        "build.passed": {
+          "$ref": "#/definitions/gate"
+        },
+        "deploy.approved": {
+          "$ref": "#/definitions/gate"
+        },
+        "deploy.healthy": {
+          "$ref": "#/definitions/gate"
+        },
+        "release.approved": {
+          "$ref": "#/definitions/gate"
+        }
+      }
+    },
+    "deploy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "May contain {env}."
+        },
+        "health_check": {
+          "type": "string"
+        },
+        "rollback": {
+          "type": "string"
+        },
+        "environments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "versioning": {
+          "enum": [
+            "semver",
+            "calver",
+            "none"
+          ]
+        },
+        "changelog": {
+          "enum": [
+            "conventional-commits",
+            "none"
+          ]
+        },
+        "publish": {
+          "type": "string"
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_iterations_per_slice": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_run_duration": {
+          "type": "string",
+          "pattern": "^[0-9]+(m|h|d)$"
+        },
+        "max_cost_usd": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    }
+  }
+}

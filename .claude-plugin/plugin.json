@@ -1,0 +1,9 @@
+{
+  "name": "genie",
+  "version": "0.1.0",
+  "description": "A consistent, gated development lifecycle for every repo: guided or fully orchestrated, from spec to release.",
+  "author": {
+    "name": "Mike Frazer"
+  },
+  "keywords": ["orchestration", "workflow", "agents", "gates", "code-review"]
+}

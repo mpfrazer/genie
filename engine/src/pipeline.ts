@@ -1,0 +1,163 @@
+// The fixed shape of the genie pipeline: stages, the gates around them, and where failures route.
+// Configuration can enable/disable stages and tune gates, but never reorder or rewire them.
+
+export const STAGES = [
+  'spec',
+  'decompose',
+  'implement',
+  'integrate',
+  'pr',
+  'merge',
+  'build',
+  'deploy',
+  'release',
+] as const;
+export type StageName = (typeof STAGES)[number];
+
+export const GATES = [
+  'spec.approved',
+  'plan.approved',
+  'slice.verified',
+  'slice.reviewed',
+  'integration.verified',
+  'pr.ready',
+  'intent.reviewed',
+  'pr.approved',
+  'build.passed',
+  'deploy.approved',
+  'deploy.healthy',
+  'release.approved',
+] as const;
+export type GateName = (typeof GATES)[number];
+
+export interface StageDef {
+  name: StageName;
+  /** False for stages that consist only of gates. */
+  hasWork: boolean;
+  /** File (relative to the run directory) that must exist before the stage's work counts as done. */
+  artifact?: string;
+  /** Short instruction handed to whoever performs the stage's work. */
+  instructions: string;
+  /** Gates that must resolve before work starts (e.g. approval to deploy). */
+  entryGates: GateName[];
+  /** Gates that must resolve before the stage passes. */
+  exitGates: GateName[];
+}
+
+export interface GateDef {
+  name: GateName;
+  description: string;
+  /** Stage to rework when the gate fails, or 'halt' to stop the run. */
+  onFail: StageName | 'halt';
+}
+
+export const STAGE_DEFS: Record<StageName, StageDef> = {
+  spec: {
+    name: 'spec',
+    hasWork: true,
+    artifact: 'spec.md',
+    instructions:
+      'Elaborate intent.md into spec.md: requirements, acceptance criteria, constraints, non-goals, risks.',
+    entryGates: [],
+    exitGates: ['spec.approved'],
+  },
+  decompose: {
+    name: 'decompose',
+    hasWork: true,
+    artifact: 'plan.md',
+    instructions:
+      'Decompose spec.md into independently implementable, testable slices with dependencies, written to plan.md.',
+    entryGates: [],
+    exitGates: ['plan.approved'],
+  },
+  // Slices run as a single unit until orchestrated mode adds per-slice state.
+  implement: {
+    name: 'implement',
+    hasWork: true,
+    instructions: 'Implement the slices in plan.md, with tests, in the working tree.',
+    entryGates: [],
+    exitGates: ['slice.verified', 'slice.reviewed'],
+  },
+  integrate: {
+    name: 'integrate',
+    hasWork: true,
+    instructions: 'Integrate completed slices onto the run branch and resolve conflicts.',
+    entryGates: [],
+    exitGates: ['integration.verified'],
+  },
+  pr: {
+    name: 'pr',
+    hasWork: true,
+    instructions: 'Push the run branch and open a pull request with a generated description.',
+    entryGates: [],
+    exitGates: ['pr.ready', 'intent.reviewed'],
+  },
+  merge: {
+    name: 'merge',
+    hasWork: true,
+    instructions: 'Merge the approved pull request into the base branch.',
+    entryGates: ['pr.approved'],
+    exitGates: [],
+  },
+  build: {
+    name: 'build',
+    hasWork: false,
+    instructions: 'Produce the release build artifact.',
+    entryGates: [],
+    exitGates: ['build.passed'],
+  },
+  deploy: {
+    name: 'deploy',
+    hasWork: true,
+    instructions: 'Deploy using deploy.command for each configured environment.',
+    entryGates: ['deploy.approved'],
+    exitGates: ['deploy.healthy'],
+  },
+  release: {
+    name: 'release',
+    hasWork: true,
+    instructions: 'Version, write the changelog, tag, and publish.',
+    entryGates: ['release.approved'],
+    exitGates: [],
+  },
+};
+
+export const GATE_DEFS: Record<GateName, GateDef> = {
+  'spec.approved': { name: 'spec.approved', description: 'Spec is complete and matches intent', onFail: 'spec' },
+  'plan.approved': {
+    name: 'plan.approved',
+    description: 'Slices cover the spec, are independent, acyclic, and reasonably sized',
+    onFail: 'decompose',
+  },
+  'slice.verified': { name: 'slice.verified', description: 'Build, lint, typecheck, and tests pass', onFail: 'implement' },
+  'slice.reviewed': {
+    name: 'slice.reviewed',
+    description: 'Adversarial review: correctness, security, test adequacy, scope',
+    onFail: 'implement',
+  },
+  'integration.verified': {
+    name: 'integration.verified',
+    description: 'Full suite passes on the integrated branch',
+    onFail: 'implement',
+  },
+  'pr.ready': { name: 'pr.ready', description: 'PR exists with description and green CI', onFail: 'pr' },
+  'intent.reviewed': {
+    name: 'intent.reviewed',
+    description: 'Final diff matches the original intent',
+    onFail: 'spec',
+  },
+  'pr.approved': { name: 'pr.approved', description: 'Required reviewers approved the PR', onFail: 'implement' },
+  'build.passed': { name: 'build.passed', description: 'Release build artifact produced', onFail: 'halt' },
+  'deploy.approved': { name: 'deploy.approved', description: 'Approval to deploy', onFail: 'halt' },
+  'deploy.healthy': { name: 'deploy.healthy', description: 'Post-deploy health checks pass', onFail: 'halt' },
+  'release.approved': { name: 'release.approved', description: 'Approval to version, tag, and publish', onFail: 'halt' },
+};
+
+/** The stage whose entry or exit gates include the given gate. */
+export function stageOfGate(gate: GateName): StageName {
+  for (const stage of STAGES) {
+    const def = STAGE_DEFS[stage];
+    if (def.entryGates.includes(gate) || def.exitGates.includes(gate)) return stage;
+  }
+  throw new Error(`gate ${gate} is not attached to any stage`);
+}
