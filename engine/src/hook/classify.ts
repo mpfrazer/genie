@@ -2,6 +2,7 @@
 import { posix } from 'node:path';
 import type { Config } from '../config/types.ts';
 import { basename, stripWrappers, type Argv } from './shell.ts';
+import { keyPath } from '../seal.ts';
 
 export type ProtectedAction =
   | { kind: 'push'; detail: string; refs: PushRefs }
@@ -13,7 +14,8 @@ export type ProtectedAction =
   | { kind: 'abort'; detail: string }
   | { kind: 'record'; detail: string; subcommand: 'gate' | 'done'; by?: string }
   | { kind: 'state_write'; detail: string; path: string }
-  | { kind: 'config_write'; detail: string; path: string };
+  | { kind: 'config_write'; detail: string; path: string }
+  | { kind: 'key_access'; detail: string; path: string };
 
 export interface PushRefs {
   /** Directory from `git -C`, if given. */
@@ -103,11 +105,23 @@ const READ_ONLY = new Set([
 const FIND_WRITES = /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/;
 
 // Engine-owned: the .genie or runs directory itself, a whole run directory, CURRENT, and each
-// run's state.json / log.jsonl / evidence (including temp-file swaps like state.json.123.tmp).
+// run's state.json / log.jsonl / evidence / grants (including temp-file swaps like state.json.123.tmp).
 // Stage artifacts (spec.md, plan.md, …) are deliberately writable.
 const STATE_PATH =
-  /(^|\/)\.genie(\/?$|\/runs(\/?$|\/CURRENT$|\/[^/]+\/?$|\/[^/]+\/(state\.json|log\.jsonl|evidence)(\/|$|\.)))/;
+  /(^|\/)\.genie(\/?$|\/runs(\/?$|\/CURRENT$|\/[^/]+\/?$|\/[^/]+\/(state\.json|log\.jsonl|evidence|grants)(\/|$|\.)))/;
 const CONFIG_PATH = /(^|\/)\.genie\/config\.yaml$/;
+const KEY_PATH = /(^|\/)\.genie\/secret$/;
+
+/**
+ * Whether `path` is genie's sealing key (seal.ts), in its default place or under $GENIE_HOME. Reading
+ * it is how run state could be forged, so the hook denies any tool call that names it.
+ */
+export function isKeyPath(path: string, dirs: string[] = []): boolean {
+  if (KEY_PATH.test(path)) return true;
+  const key = keyPath();
+  if (path === key) return true;
+  return !path.startsWith('/') && dirs.some((d) => posix.join(d, path) === key || KEY_PATH.test(posix.join(d, path)));
+}
 
 /** Whether `path` is engine-owned run state (writable only through the genie CLI). */
 export function isStatePath(path: string): boolean {
@@ -179,6 +193,9 @@ export function classify(raw: Argv, config: Config | undefined, dirs: string[] =
   const detail = argv.join(' ');
   const cmd = basename(argv[0] ?? '');
   const actions: ProtectedAction[] = [];
+
+  const key = argv.find((a, i) => i > 0 && isKeyPath(a, dirs));
+  if (key) actions.push({ kind: 'key_access', detail, path: key });
 
   const genieArgs = isGenie(argv);
   if (genieArgs) {

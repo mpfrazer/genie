@@ -1,13 +1,24 @@
 {
-  "description": "genie gate enforcement: outward actions wait for their gates, human gates take only human approvals, and run state is engine-owned.",
+  "description": "genie gate enforcement: outward actions wait for their gates, human-only commands need the user to type them, and run state and its sealing key are engine-owned.",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep",
         "hooks": [
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs\" hook pre-tool-use",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs\" hook user-prompt-expansion",
             "timeout": 10
           }
         ]

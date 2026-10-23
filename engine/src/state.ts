@@ -1,6 +1,6 @@
 import { GenieError } from './errors.ts';
 import { GATES, RUN_GATES, SLICE_GATES, STAGES, type RunGateName, type SliceGateName, type StageName } from './pipeline.ts';
-import type { Mode } from './config/types.ts';
+import type { Config, Mode } from './config/types.ts';
 import type { PlanSlice } from './plan.ts';
 
 export const STATE_VERSION = 2;
@@ -65,6 +65,15 @@ export interface RunState {
   gates: Record<RunGateName, GateState>;
   /** Orchestrated-mode budget accounting; absent until the run's first orchestrated step. */
   budget?: BudgetState;
+  /**
+   * The configuration the run follows, snapshotted when it starts. Edits to .genie/config.yaml
+   * reach a live run only when a human applies them (`/genie:approve config`).
+   */
+  config?: Config;
+  /** The MAC chain's value after the last log line genie wrote (see seal.ts). */
+  logMac?: string;
+  /** MAC over the rest of this state, written last; a mismatch means it was changed outside genie. */
+  seal?: string;
   /** The plan's slices in plan order, followed by any fix-up slices. Empty until `done decompose`. */
   slices: SliceState[];
 }

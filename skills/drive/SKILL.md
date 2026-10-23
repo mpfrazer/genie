@@ -14,7 +14,7 @@ node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs"
 
 Below it's written `GENIE`. Always type the full command: it isn't on PATH, and the plugin-root variable isn't set in Bash.
 
-The engine owns the run. Never edit `.genie/runs/*/state.json`, `log.jsonl`, `CURRENT`, or `evidence/`, and never run `GENIE approve`. Hooks deny all of these. Only the user approves human gates, with `/genie:approve`.
+The engine owns the run. Never edit `.genie/runs/*/state.json`, `log.jsonl`, `CURRENT`, or `evidence/`, and never run `GENIE approve`. Hooks deny all of these. Only the user approves human gates, with `/genie:approve`. If `GENIE` reports that the run was changed outside genie, stop and tell the user. Don't try to repair the state: only they can accept it (`/genie:approve state`) or abort it.
 
 ## Loop
 

@@ -2,13 +2,14 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { GenieError } from '../errors.ts';
-import { abort, advance, completeWork, nextAction, nextActions, type Action, type Ctx } from '../engine.ts';
-import { STAGE_DEFS, STAGES, isSliceGate, type GateName, type StageName } from '../pipeline.ts';
+import { abort, advance, completeWork, gateConfig, nextAction, nextActions, type Action, type Ctx } from '../engine.ts';
+import { STAGE_DEFS, STAGES, isSliceGate, type GateName, type RunGateName, type StageName } from '../pipeline.ts';
 import { loadPlan } from '../plan.ts';
 import { findSlice, newRunState, type RunState } from '../state.ts';
 import type { Mode } from '../config/types.ts';
-import { appendLog, currentRunId, loadRun, readLog, runDir, saveRun, setCurrentRun, writeAtomic, type LogEvent } from '../store.ts';
+import { commitRun, currentRunId, loadRun, readLog, runDir, setCurrentRun, writeAtomic, type LogEvent } from '../store.ts';
 import { mutateRun, type Session } from '../session.ts';
+import { redeemGrant } from '../grants.ts';
 import { cleanUpAborted, dispatchWorktrees, settle } from '../orchestrate.ts';
 
 export interface RunView {
@@ -42,7 +43,8 @@ export function newRun(session: Session, intent: string, mode?: Mode): RunView {
   if (!text) throw new GenieError('intent is empty');
   const active = currentRunId(session.root);
   if (active) {
-    const { status } = loadRun(session.root, active);
+    // Unverified: a run that fails verification still blocks a new one if it claims to be live.
+    const { status } = loadRun(session.root, active, { unverified: true });
     if (status === 'active' || status === 'halted') {
       throw new GenieError(`run ${active} is still ${status} (finish it or \`genie abort\` first)`);
     }
@@ -53,16 +55,17 @@ export function newRun(session: Session, intent: string, mode?: Mode): RunView {
   const id = runId(now, title);
   if (existsSync(runDir(session.root, id))) throw new GenieError(`run ${id} already exists`);
 
-  const { base_branch: base, branch_prefix: prefix } = session.config.forge;
-  const state = newRunState({ id, title, mode: mode ?? session.config.mode.default, branch: `${prefix}${id}`, base }, now);
+  const config = session.fileConfig;
+  const { base_branch: base, branch_prefix: prefix } = config.forge;
+  const state = newRunState({ id, title, mode: mode ?? config.mode.default, branch: `${prefix}${id}`, base }, now);
+  state.config = config;
   const ctx: Ctx = { now, events: [{ ts: now, run: id, type: 'run.created', note: title, mode: state.mode }] };
-  advance(state, session.config, ctx);
+  advance(state, config, ctx);
 
   writeAtomic(join(runDir(session.root, id), 'intent.md'), `# ${title}\n\n${text}\n`);
-  saveRun(session.root, state);
-  appendLog(session.root, id, ctx.events);
+  commitRun(session.root, state, ctx.events);
   setCurrentRun(session.root, id);
-  return view(session, state);
+  return view({ ...session, config }, state);
 }
 
 export interface Feedback {
@@ -102,6 +105,8 @@ export interface NextView extends ActionView {
   actions: ActionView[];
   /** How many actions an orchestrator may run at once (`mode.max_parallel_slices`). */
   parallel: number;
+  /** Settings changed in .genie/config.yaml that the run won't follow until the user runs `/genie:approve config`. */
+  configPending?: string[];
 }
 
 function verdictBefore(log: LogEvent[], index: number, gate: GateName, slice?: string): Feedback | undefined {
@@ -160,6 +165,7 @@ export function next(session: Session, id?: string): NextView {
     ...actions[0]!,
     actions,
     parallel: session.config.mode.max_parallel_slices,
+    ...(session.pendingConfig.length > 0 ? { configPending: session.pendingConfig } : {}),
   };
 }
 
@@ -216,7 +222,19 @@ export function done(session: Session, stage: string, by: string, id?: string, s
 }
 
 export function abortRun(session: Session, reason: string | undefined, id?: string): RunView & { note?: string } {
-  const { state } = mutateRun(session, id, (s, ctx) => abort(s, reason, ctx));
+  const runId = id ?? currentRunId(session.root);
+  if (!runId) throw new GenieError('no active run');
+  const grant = redeemGrant(session.root, runId, 'abort', { reject: false }, session.now());
+  // Unverified: the user can stop a run even when its state failed verification.
+  const { state } = mutateRun(
+    session,
+    runId,
+    (s, ctx) => {
+      abort(s, reason, ctx);
+      ctx.events.at(-1)!.grant = grant.nonce;
+    },
+    { unverified: true },
+  );
   const note = cleanUpAborted(session, state.id);
   return { ...view(session, state), ...(note ? { note } : {}) };
 }
@@ -225,6 +243,15 @@ export function abortRun(session: Session, reason: string | undefined, id?: stri
 export function setMode(session: Session, mode: Mode, id?: string): RunView {
   const { state } = mutateRun(session, id, (s, ctx) => {
     if (s.mode === mode) return;
+    // The model can switch modes, so a switch must never hand a decision waiting on a human to an agent.
+    const after = { ...s, mode };
+    for (const action of nextActions(s, session.config)) {
+      if (action.type !== 'await_human' || s.gates[action.gate as RunGateName]?.status === 'needs_human' || action.slice) continue;
+      const kind = gateConfig(after, session.config, action.gate).kind;
+      if (kind !== 'human' && kind !== 'agent+human') {
+        throw new GenieError(`${action.gate} is waiting on a human decision, which ${mode} mode would give to an agent; decide it first`);
+      }
+    }
     ctx.events.push({ ts: ctx.now, run: s.id, type: 'run.mode', note: `${s.mode} → ${mode}`, mode });
     s.mode = mode;
     s.updatedAt = ctx.now;
