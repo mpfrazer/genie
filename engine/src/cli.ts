@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import YAML from 'yaml';
 import { GenieError } from './errors.ts';
 import { init } from './commands/init.ts';
-import { abortRun, done, newRun, next, status, type RunView } from './commands/run.ts';
+import { abortRun, done, newRun, next, setMode, status, type RunView } from './commands/run.ts';
 import { agentVerdict, approve, runGate } from './commands/gate.ts';
 import { hookOutput, preToolUse, type PreToolUseInput } from './commands/hook.ts';
 import { statusline } from './commands/statusline.ts';
@@ -21,7 +21,9 @@ Usage: genie <command> [options]
   new <intent...> [--file <path>|-] [--mode guided|orchestrated]
                                          Start a run
   status                                 Show the run and what happens next
-  next                                   Show only what happens next
+  next                                   Show what happens next (orchestrated: every ready action,
+                                         with a worktree for each ready slice)
+  mode guided|orchestrated               Switch the run's mode
   done <stage> [--by <author>] [--slice <id>]
                                          Mark the current stage's work (or one slice's) complete
   gate <gate> --run [--slice <id>]       Evaluate an automated gate
@@ -110,11 +112,13 @@ function main(argv: string[]): number {
     case 'next': {
       const session = openSession(process.cwd());
       const v = next(session, id);
-      const text = v.actions.map(({ action, feedback }) => {
+      const text = v.actions.map(({ action, feedback, worktree }) => {
+        const cause = feedback?.conflict ? 'a merge conflict' : `${feedback?.gate} failed`;
         const why = feedback
-          ? `Reworking after ${feedback.gate} failed${feedback.note ? `: ${feedback.note}` : ''}${feedback.evidence?.length ? `\n  evidence: ${feedback.evidence.join(', ')}` : ''}\n`
+          ? `Reworking after ${cause}${feedback.note ? `: ${feedback.note}` : ''}${feedback.evidence?.length ? `\n  evidence: ${feedback.evidence.join(', ')}` : ''}\n`
           : '';
-        return `${why}${describeAction(action)}`;
+        const where = worktree ? `\n  worktree: ${worktree.path} (${worktree.branch}, merges onto ${worktree.base})` : '';
+        return `${why}${describeAction(action)}${where}`;
       });
       print(v, text.join('\n\n'));
       return 0;
@@ -157,7 +161,14 @@ function main(argv: string[]): number {
     }
     case 'abort': {
       const session = openSession(process.cwd());
-      printRun(abortRun(session, opts.note, id), session.config);
+      const r = abortRun(session, opts.note, id);
+      printRun(r, session.config, r.note ? `note: ${r.note}\n\n` : '');
+      return 0;
+    }
+    case 'mode': {
+      const session = openSession(process.cwd());
+      if (rest[0] !== 'guided' && rest[0] !== 'orchestrated') throw new GenieError('usage: genie mode guided|orchestrated');
+      printRun(setMode(session, rest[0], id), session.config);
       return 0;
     }
     case 'hook': {

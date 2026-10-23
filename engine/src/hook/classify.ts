@@ -100,6 +100,8 @@ const READ_ONLY = new Set([
   'cd', 'pushd', 'test', '[', 'realpath', 'readlink', 'tree', 'du', 'cmp',
 ]);
 
+const FIND_WRITES = /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/;
+
 // Engine-owned: the .genie or runs directory itself, a whole run directory, CURRENT, and each
 // run's state.json / log.jsonl / evidence (including temp-file swaps like state.json.123.tmp).
 // Stage artifacts (spec.md, plan.md, …) are deliberately writable.
@@ -129,6 +131,8 @@ function writesTo(argv: Argv, matches: (p: string) => boolean, dirs: string[]): 
     if (redirect && hit(redirect)) return redirect;
   }
   if (READ_ONLY.has(basename(argv[0] ?? ''))) return undefined;
+  // find only writes through these actions; otherwise the paths it names are only searched.
+  if (basename(argv[0] ?? '') === 'find' && !argv.some((a) => FIND_WRITES.test(a))) return undefined;
   return argv.slice(1).find(hit);
 }
 

@@ -6,7 +6,7 @@ import type { PlanSlice } from './plan.ts';
 export const STATE_VERSION = 2;
 
 export type StagePhase = 'pending' | 'entry' | 'work' | 'exit' | 'passed' | 'skipped';
-export type SlicePhase = 'work' | 'exit' | 'passed';
+export type SlicePhase = 'work' | 'exit' | 'merge' | 'passed';
 export type GateStatus = 'pending' | 'pass' | 'fail' | 'needs_human' | 'skipped';
 export type Verdict = 'pass' | 'fail' | 'needs_human';
 export type RunStatus = 'active' | 'halted' | 'done' | 'aborted';
@@ -30,12 +30,19 @@ export interface GateState {
 export interface SliceState {
   /** The slice as planned: snapshotted from plan.yaml at `done decompose`, or synthesized for fix-ups. */
   def: PlanSlice;
-  /** `work` until its work is done, `exit` while its gates run, then `passed`. */
+  /**
+   * `work` until its work is done, `exit` while its gates run, then `passed`. A slice with its own
+   * worktree goes through `merge` first, until its branch lands on the run branch.
+   */
   phase: SlicePhase;
   /** Who did the slice's work; they may not evaluate its gates. */
   author?: string;
   /** On fix-up slices: the run-level gate whose failure sent the run back to implement. */
   fixes?: RunGateName;
+  /** Orchestrated mode: the slice's own worktree and branch, while they exist. */
+  worktree?: { path: string; branch: string };
+  /** The merge commit that landed the slice on the run branch (orchestrated mode). */
+  merged?: string;
   gates: Record<SliceGateName, GateState>;
 }
 

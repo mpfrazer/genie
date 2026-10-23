@@ -61,7 +61,7 @@ export function describeRun(state: RunState, config: Config, action: Action, dir
   return lines.join('\n');
 }
 
-const SLICE_MARK: Record<SlicePhase, string> = { work: '▶', exit: '▶', passed: '✓' };
+const SLICE_MARK: Record<SlicePhase, string> = { work: '▶', exit: '▶', merge: '▶', passed: '✓' };
 
 /** One line per slice under the implement stage: progress and its gates. */
 function describeSlices(state: RunState, config: Config): string[] {

@@ -99,11 +99,19 @@ function sliceReady(state: RunState, slice: SliceState): boolean {
   return slice.def.depends_on.every((dep) => findSlice(state, dep)?.phase === 'passed');
 }
 
-/** Passes every slice whose gates have all resolved. Returns true once all slices have passed. */
+/**
+ * Passes every slice whose gates have all resolved, or queues it to merge when it has its own
+ * branch. Returns true once all slices have passed.
+ */
 function advanceSlices(state: RunState, config: Config, ctx: Ctx): boolean {
   for (const slice of state.slices) {
     if (slice.phase !== 'exit') continue;
     if (resolveGates(state, config, SLICE_GATES, (g) => slice.gates[g], ctx, slice.def.id)) continue;
+    if (slice.worktree) {
+      slice.phase = 'merge';
+      emit(state, ctx, { type: 'slice.merging', stage: 'implement', slice: slice.def.id });
+      continue;
+    }
     slice.phase = 'passed';
     emit(state, ctx, { type: 'slice.passed', stage: 'implement', slice: slice.def.id });
   }
@@ -218,8 +226,13 @@ export function nextActions(state: RunState, config: Config): Action[] {
   if (state.stages[stage].phase === 'work') {
     if (stage === 'implement' && state.slices.length > 0) {
       const actions = state.slices.flatMap((s) => sliceAction(state, config, s) ?? []);
-      if (actions.length === 0) throw new Error(`run ${state.id}: no slice is actionable; call advance() first`);
-      return actions;
+      if (actions.length > 0) return actions;
+      const merging = state.slices.filter((s) => s.phase === 'merge').map((s) => s.def.id);
+      if (merging.length > 0) {
+        // Merges are settled after every mutation; this is only reached when one couldn't run.
+        throw new GenieError(`slice ${merging.join(', ')} is waiting to merge onto ${state.branch}; see the error above`);
+      }
+      throw new Error(`run ${state.id}: no slice is actionable; call advance() first`);
     }
     const def = STAGE_DEFS[stage];
     return [{ type: 'work', stage, instructions: def.instructions, artifact: def.artifact, skill: def.skill, agent: def.agent }];
@@ -423,12 +436,52 @@ export function recordVerdict(state: RunState, config: Config, input: VerdictInp
 
 /** Sends one slice back to work: its gates reset (keeping their attempt and failure counts). */
 function reworkSlice(state: RunState, slice: SliceState, gate: GateName, ctx: Ctx): void {
+  resetSlice(slice);
+  emit(state, ctx, { type: 'slice.rework', stage: 'implement', slice: slice.def.id, gate });
+  touch(state, ctx);
+}
+
+function resetSlice(slice: SliceState): void {
   slice.phase = 'work';
   for (const g of SLICE_GATES) {
     slice.gates[g].status = 'pending';
     delete slice.gates[g].agentReview;
   }
-  emit(state, ctx, { type: 'slice.rework', stage: 'implement', slice: slice.def.id, gate });
+}
+
+function mergingSlice(state: RunState, id: string): SliceState {
+  requireActive(state);
+  const slice = findSlice(state, id);
+  if (!slice) throw new GenieError(`unknown slice ${id}`);
+  if (slice.phase !== 'merge') throw new GenieError(`slice ${id} is not waiting to merge (it is ${slice.phase})`);
+  return slice;
+}
+
+/** Records that a slice's branch landed on the run branch, passing the slice. */
+export function sliceMerged(state: RunState, config: Config, id: string, commit: string, ctx: Ctx): void {
+  const slice = mergingSlice(state, id);
+  slice.phase = 'passed';
+  slice.merged = commit;
+  emit(state, ctx, { type: 'slice.merged', stage: 'implement', slice: id, note: commit });
+  emit(state, ctx, { type: 'slice.passed', stage: 'implement', slice: id });
+  touch(state, ctx);
+  advance(state, config, ctx);
+}
+
+/**
+ * A slice's branch conflicts with the run branch (another slice landed first). It goes back to
+ * work to resolve the conflict, and its gates run again on the result.
+ */
+export function sliceConflict(state: RunState, id: string, files: string[], ctx: Ctx): void {
+  const slice = mergingSlice(state, id);
+  resetSlice(slice);
+  emit(state, ctx, {
+    type: 'slice.rework',
+    stage: 'implement',
+    slice: id,
+    note: `merge conflict onto ${state.branch} in ${files.join(', ')}`,
+    conflict: files,
+  });
   touch(state, ctx);
 }
 
