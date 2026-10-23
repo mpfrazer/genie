@@ -45,6 +45,15 @@ export interface Config {
     changelog: 'conventional-commits' | 'none';
     publish?: string;
   };
+  /** What the PreToolUse hook enforces. Core invariants (no model approvals, no state tampering) always apply. */
+  enforcement: {
+    /** Gate outward actions (push, PR, merge, deploy, release) on run progress. */
+    enabled: boolean;
+    /** Refuse pushes that update forge.base_branch: changes land through PRs. */
+    protect_base_branch: boolean;
+    /** Whether outward actions are allowed when no run is active. */
+    outside_run: 'allow' | 'deny';
+  };
   budgets: {
     max_iterations_per_slice: number;
     max_run_duration: string;

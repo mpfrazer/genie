@@ -257,6 +257,28 @@
         }
       }
     },
+    "enforcement": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the PreToolUse hook enforces. Core invariants (no model approvals, no state tampering, verdict identity) always apply.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Gate outward actions (push, PR, merge, deploy, release) on run progress."
+        },
+        "protect_base_branch": {
+          "type": "boolean",
+          "description": "Refuse pushes that update forge.base_branch."
+        },
+        "outside_run": {
+          "enum": [
+            "allow",
+            "deny"
+          ],
+          "description": "Whether outward actions are allowed when no run is active."
+        }
+      }
+    },
     "budgets": {
       "type": "object",
       "additionalProperties": false,
