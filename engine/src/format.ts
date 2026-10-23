@@ -26,7 +26,7 @@ export function describeAction(action: Action): string {
     case 'evaluate':
       return action.kind === 'automated'
         ? `Evaluate ${action.gate}${of} (automated: ${action.checks.join(', ') || 'no checks'})\n  run: genie gate ${action.gate}${flag} --run`
-        : `Evaluate ${action.gate}${of} with the ${action.evaluator ?? 'configured'} agent\n  then: genie gate ${action.gate}${flag} --verdict pass|fail --by ${action.evaluator ?? '<agent>'} [--findings <file>]`;
+        : `Evaluate ${action.gate}${of} with the ${action.evaluator ?? 'configured'} agent\n  then: genie gate ${action.gate}${flag} --verdict pass|fail --by ${action.evaluator ?? '<agent>'} --findings <file>`;
     case 'await_human': {
       const review = action.agentReview
         ? `\n  agent pre-review by ${action.agentReview.by}: ${action.agentReview.verdict}${action.agentReview.note ? ` (${action.agentReview.note})` : ''}`

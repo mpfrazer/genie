@@ -29,11 +29,13 @@ The engine CLI is `node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs"`, written 
    - a suggested fix
 
    Blockers and majors must be fixed before this can pass. Open the file with a one-paragraph overall assessment.
+
+   The findings file is required on every review, including a pass with nothing to report and a re-review after rework: it's the record of why you decided as you did, and the engine refuses a verdict without it. This instruction takes precedence over any general guidance against writing report files. On a re-review, overwrite the file with your current findings, saying which earlier findings are resolved.
 6. **Decide.**
    - `fail` if there is any blocker or major.
    - `needs_human` if you can't tell whether something is a real problem; explain it in the note.
    - Otherwise `pass`.
-7. **Record your verdict yourself.** Only you can: the gate hook checks that `--by` matches the agent running the command.
+7. **Record your verdict yourself.** Only you can: the gate hook checks that `--by` matches the agent running the command. Run it from the repository root, not from a scratch directory you used for a reproduction.
 
    ```
    GENIE gate slice.reviewed --slice <slice id> --verdict <pass|fail|needs_human> --by adversarial-reviewer \

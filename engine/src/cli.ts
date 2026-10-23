@@ -25,7 +25,7 @@ Usage: genie <command> [options]
   done <stage> [--by <author>] [--slice <id>]
                                          Mark the current stage's work (or one slice's) complete
   gate <gate> --run [--slice <id>]       Evaluate an automated gate
-  gate <gate> --verdict pass|fail|needs_human --by <agent> [--slice <id>] [--findings <file>] [--note <text>]
+  gate <gate> --verdict pass|fail|needs_human --by <agent> [--slice <id>] --findings <file> [--note <text>]
                                          Record an agent gate verdict
   approve <gate> [--reject] [--slice <id>] [--note <text>]
                                          Record a human decision (human-only channel)

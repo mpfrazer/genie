@@ -1,4 +1,5 @@
 // Maps simple commands to the protected actions the gate hook cares about.
+import { posix } from 'node:path';
 import type { Config } from '../config/types.ts';
 import { basename, stripWrappers, type Argv } from './shell.ts';
 
@@ -96,6 +97,7 @@ const PUBLISH = [
 
 const READ_ONLY = new Set([
   'cat', 'less', 'more', 'head', 'tail', 'grep', 'rg', 'egrep', 'jq', 'wc', 'ls', 'stat', 'file', 'diff', 'bat',
+  'cd', 'pushd', 'test', '[', 'realpath', 'readlink', 'tree', 'du', 'cmp',
 ]);
 
 // Engine-owned: the .genie or runs directory itself, a whole run directory, CURRENT, and each
@@ -114,15 +116,20 @@ export function isConfigPath(path: string): boolean {
   return CONFIG_PATH.test(path);
 }
 
-/** True when `argv` would write `path`: a redirect onto it, or a non-read-only command naming it. */
-function writesTo(argv: Argv, matches: (p: string) => boolean): string | undefined {
+/**
+ * True when `argv` would write `path`: a redirect onto it, or a non-read-only command naming it.
+ * Relative paths are also tried against each directory in `dirs` (the directories the command may
+ * be running in), so `cd .genie/runs/r1 && echo x > state.json` is still caught.
+ */
+function writesTo(argv: Argv, matches: (p: string) => boolean, dirs: string[]): string | undefined {
+  const hit = (p: string) => matches(p) || (!p.startsWith('/') && dirs.some((d) => matches(posix.join(d, p))));
   for (let i = 0; i < argv.length; i++) {
     const w = argv[i]!;
     const redirect = /^\d*>>?$/.test(w) ? argv[i + 1] : /^\d*>>?(.+)$/.exec(w)?.[1];
-    if (redirect && matches(redirect)) return redirect;
+    if (redirect && hit(redirect)) return redirect;
   }
   if (READ_ONLY.has(basename(argv[0] ?? ''))) return undefined;
-  return argv.slice(1).find((w) => matches(w));
+  return argv.slice(1).find(hit);
 }
 
 function isGenie(argv: Argv): Argv | undefined {
@@ -163,7 +170,7 @@ function flagValue(args: Argv, flag: string): string | undefined {
   return args.find((a) => a.startsWith(`${flag}=`))?.slice(flag.length + 1);
 }
 
-export function classify(raw: Argv, config: Config | undefined): ProtectedAction[] {
+export function classify(raw: Argv, config: Config | undefined, dirs: string[] = []): ProtectedAction[] {
   const argv = stripWrappers(raw);
   const detail = argv.join(' ');
   const cmd = basename(argv[0] ?? '');
@@ -204,9 +211,29 @@ export function classify(raw: Argv, config: Config | undefined): ProtectedAction
   }
   if (startsWith(argv, commandPrefix(config?.deploy.command))) actions.push({ kind: 'deploy', detail });
 
-  const state = writesTo(argv, isStatePath);
+  const state = writesTo(argv, isStatePath, dirs);
   if (state) actions.push({ kind: 'state_write', detail, path: state });
-  const cfg = writesTo(argv, isConfigPath);
+  const cfg = writesTo(argv, isConfigPath, dirs);
   if (cfg) actions.push({ kind: 'config_write', detail, path: cfg });
   return actions;
+}
+
+const MAX_DIRS = 64;
+
+/**
+ * Classifies a command's simple commands in order, following `cd`/`pushd`. Pipelines and subshells
+ * blur where each one runs, so every directory seen so far stays a candidate, which errs toward denying.
+ */
+export function classifyCommands(commands: Argv[], config: Config | undefined, cwd?: string): ProtectedAction[] {
+  const dirs = new Set(cwd ? [cwd] : []);
+  return commands.flatMap((raw) => {
+    const argv = stripWrappers(raw);
+    const cmd = basename(argv[0] ?? '');
+    const to = argv.slice(1).find((a) => !a.startsWith('-'));
+    if ((cmd === 'cd' || cmd === 'pushd') && to) {
+      const next = to.startsWith('/') ? [to] : [to, ...[...dirs].map((d) => posix.join(d, to))];
+      for (const d of next) if (dirs.size < MAX_DIRS) dirs.add(d);
+    }
+    return classify(raw, config, [...dirs]);
+  });
 }

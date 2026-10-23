@@ -6,7 +6,7 @@ import { loadConfig, repoConfigPath } from '../config/load.ts';
 import type { Config } from '../config/types.ts';
 import type { RunState } from '../state.ts';
 import { currentRunId, findRoot, loadRun } from '../store.ts';
-import { classify, isConfigPath, isStatePath, type ProtectedAction } from '../hook/classify.ts';
+import { classifyCommands, isConfigPath, isStatePath, type ProtectedAction } from '../hook/classify.ts';
 import { callerFrom, decide, type Decision } from '../hook/policy.ts';
 import { simpleCommands } from '../hook/shell.ts';
 
@@ -29,7 +29,7 @@ export interface HookOutput {
 function toolActions(input: PreToolUseInput, config: Config | undefined): ProtectedAction[] {
   const { tool_name: tool, tool_input: args } = input;
   if (tool === 'Bash') {
-    return simpleCommands(args.command ?? '').flatMap((argv) => classify(argv, config));
+    return classifyCommands(simpleCommands(args.command ?? ''), config, input.cwd);
   }
   const path = args.file_path ?? args.notebook_path;
   if (!path) return [];

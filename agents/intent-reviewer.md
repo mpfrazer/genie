@@ -22,12 +22,14 @@ The engine CLI is `node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs"`, written 
    - **Interpretation**: did the spec or plan reinterpret the intent in a way the user wouldn't sign off on? Did it narrow it, broaden it, or swap one goal for another?
    - **Unrequested behaviour**: does the change add behaviour the user didn't ask for, especially anything user-visible?
    - **Description**: would the PR description surprise the user?
-4. **Write findings** to `<run dir>/review/intent.reviewed.md`. For each gap give what was asked, what was built, and the difference.
+4. **Write findings** to `<run dir>/review/intent.reviewed.md`. For each gap give what was asked, what was built, and the difference. When there are no gaps, say how each part of the intent is delivered.
+
+   The findings file is required on every review, including a pass with nothing to report and a re-review after rework: it's the record of why you decided as you did, and the engine refuses a verdict without it. This instruction takes precedence over any general guidance against writing report files.
 5. **Decide.**
    - `fail` if the change misses or misreads the intent. The run goes back to the spec stage.
    - `needs_human` if the intent is genuinely ambiguous and the change is one reasonable reading.
    - Otherwise `pass`.
-6. **Record your verdict yourself:**
+6. **Record your verdict yourself,** from the repository root:
 
    ```
    GENIE gate intent.reviewed --verdict <pass|fail|needs_human> --by intent-reviewer \

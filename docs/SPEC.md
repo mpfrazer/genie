@@ -172,7 +172,7 @@ Not yet verified: whether PreToolUse fires for user-typed `! cmd` bash-mode comm
 |---|---|---|
 | Approve | `genie approve …` | Always denied: the model can't satisfy human gates. |
 | Record | `genie gate … --verdict`, `genie done` | `--by` must equal the caller: the subagent's name, or `claude` for the main session. Authors can't impersonate reviewers. |
-| State write | writes/redirects to `.genie/runs/{CURRENT,<id>,<id>/state.json,log.jsonl,evidence}` | Always denied. Stage artifacts (`spec.md`, `plan.yaml`) stay writable. |
+| State write | writes/redirects to `.genie/runs/{CURRENT,<id>,<id>/state.json,log.jsonl,evidence}` | Always denied. Stage artifacts (`spec.md`, `plan.yaml`) stay writable. Readers and `cd` into a run dir are allowed; relative paths are resolved against the session cwd and every directory the command `cd`s into, so `cd <run dir> && echo x > state.json` is still caught. |
 | Config write | writes to `.genie/config.yaml` | **Ask**: the user confirms, because it changes which gates apply. |
 | Push to base | `git push` that updates `forge.base_branch` (explicitly, implicitly from it, `--all`/`--mirror`, delete) | Denied when `enforcement.protect_base_branch` (default on). |
 | Push / open PR | `git push`, `gh pr create`, `glab mr create` | Allowed once the run reaches `pr`. |
@@ -318,7 +318,7 @@ Each command prints text by default; pass `--json` for output Claude can parse.
 | `genie status` / `genie next` | Show the run (with per-slice progress), or only the next actions |
 | `genie done <stage> [--slice <id>]` | Mark stage work complete (checks the required artifact; validates plan.yaml for decompose), or one slice's work in implement |
 | `genie gate <g> --run [--slice <id>]` | Run an automated gate's checks, record the verdict and its evidence |
-| `genie gate <g> --verdict … --by <agent> [--slice <id>]` | Record an agent verdict (the stage or slice author is refused) |
+| `genie gate <g> --verdict … --by <agent> --findings <file> [--slice <id>]` | Record an agent verdict (the stage or slice author is refused). The findings file is required, pass or fail, and is copied into the run's evidence. |
 | `genie approve <g> [--reject] [--slice <id>]` | Record a human decision (see §4.5) |
 
 `--slice` names the slice for slice gates and implement work. It can be left out when exactly one slice is waiting.
