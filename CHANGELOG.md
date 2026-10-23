@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/mpfrazer/genie/compare/v0.1.0...v0.2.0) (2026-10-23)
+
+
+### Features
+
+* enforce gates with a PreToolUse hook and human-only /genie:approve ([#6](https://github.com/mpfrazer/genie/issues/6)) ([a6121fa](https://github.com/mpfrazer/genie/commit/a6121fa2a878055bccb2ea9c91ec5424a804865b))
+
 ## 0.1.0 (2026-10-23)
 
 
