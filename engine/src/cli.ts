@@ -5,11 +5,11 @@ import { GenieError } from './errors.ts';
 import { init } from './commands/init.ts';
 import { abortRun, done, newRun, next, setMode, status, type RunView } from './commands/run.ts';
 import { agentVerdict, approve, runGate } from './commands/gate.ts';
-import { hookOutput, preToolUse, type PreToolUseInput } from './commands/hook.ts';
+import { hookOutput, preToolUse, promptExpansion, type PreToolUseInput, type PromptExpansionInput } from './commands/hook.ts';
 import { statusline } from './commands/statusline.ts';
 import { describeAction, describeChecks, describeRun } from './format.ts';
 import { loadConfig } from './config/load.ts';
-import { openSession } from './session.ts';
+import { configDiff, openSession } from './session.ts';
 import type { Config, Mode } from './config/types.ts';
 
 const USAGE = `genie: deterministic pipeline engine
@@ -36,6 +36,7 @@ Usage: genie <command> [options]
   it can be left out when only one slice is waiting.
   abort [--note <text>]                  Abort the run
   hook pre-tool-use                      Claude Code PreToolUse hook (reads the payload on stdin)
+  hook user-prompt-expansion             Claude Code UserPromptExpansion hook: grants /genie:approve and /genie:abort
   statusline                             One-line run status for Claude Code's statusLine (payload on stdin)
 
 Global: --json  machine-readable output    --run-id <id>  target a specific run    --version`;
@@ -70,8 +71,20 @@ function main(argv: string[]): number {
   const json = opts.json ?? false;
   const id = opts['run-id'];
   const print = (data: unknown, text: string) => console.log(json ? JSON.stringify(data, null, 2) : text);
-  const printRun = (v: RunView, config: Config, extra = '') =>
-    print(v, `${extra}${describeRun(v.state, config, v.action, v.dir)}`);
+  const printRun = (v: RunView, config: Config, extra = '') => print(v, `${extra}${describeRun(v.state, config, v.action, v.dir)}${pending(v)}`);
+  // Read fresh: approve config clears it within the same command.
+  const pending = (v: RunView) => {
+    if (v.state.status !== 'active' && v.state.status !== 'halted') return '';
+    let changed: string[] = [];
+    try {
+      if (v.state.config) changed = configDiff(v.state.config, openSession(process.cwd(), undefined, v.state.id).fileConfig);
+    } catch (err) {
+      return `\n\n.genie/config.yaml can't be read (${(err as Error).message}); the run keeps its own config.`;
+    }
+    return changed.length > 0
+      ? `\n\n.genie/config.yaml changed since the run started (${changed.join(', ')}). The run keeps its own config until you apply the change: /genie:approve config`
+      : '';
+  };
 
   if (opts.version || command === 'version') {
     print({ version: version() }, version());
@@ -90,13 +103,13 @@ function main(argv: string[]): number {
       return 0;
     }
     case 'config': {
-      const session = openSession(process.cwd());
+      const session = openSession(process.cwd(), undefined, id);
       const { sources } = loadConfig({ root: session.root });
       print({ config: session.config, sources }, `# sources: defaults, profile:${session.config.profile}${sources.map((s) => `, ${s}`).join('')}\n${YAML.stringify(session.config)}`);
       return 0;
     }
     case 'new': {
-      const session = openSession(process.cwd());
+      const session = openSession(process.cwd(), undefined, id);
       const intent = opts.file ? readFileSync(opts.file === '-' ? 0 : opts.file, 'utf8') : rest.join(' ');
       if (opts.mode && opts.mode !== 'guided' && opts.mode !== 'orchestrated') {
         throw new GenieError(`--mode must be guided or orchestrated (got "${opts.mode}")`);
@@ -105,12 +118,12 @@ function main(argv: string[]): number {
       return 0;
     }
     case 'status': {
-      const session = openSession(process.cwd());
+      const session = openSession(process.cwd(), undefined, id);
       printRun(status(session, id), session.config);
       return 0;
     }
     case 'next': {
-      const session = openSession(process.cwd());
+      const session = openSession(process.cwd(), undefined, id);
       const v = next(session, id);
       const text = v.actions.map(({ action, feedback, worktree }) => {
         const cause = feedback?.conflict ? 'a merge conflict' : `${feedback?.gate} failed`;
@@ -124,13 +137,13 @@ function main(argv: string[]): number {
       return 0;
     }
     case 'done': {
-      const session = openSession(process.cwd());
+      const session = openSession(process.cwd(), undefined, id);
       if (!rest[0]) throw new GenieError('usage: genie done <stage>');
       printRun(done(session, rest[0], opts.by ?? 'claude', id, opts.slice), session.config);
       return 0;
     }
     case 'gate': {
-      const session = openSession(process.cwd());
+      const session = openSession(process.cwd(), undefined, id);
       const gate = rest[0];
       if (!gate) throw new GenieError('usage: genie gate <gate> --run | --verdict <v> --by <agent>');
       if (opts.run) {
@@ -154,25 +167,34 @@ function main(argv: string[]): number {
       return 0;
     }
     case 'approve': {
-      const session = openSession(process.cwd());
+      const session = openSession(process.cwd(), undefined, id);
       if (!rest[0]) throw new GenieError('usage: genie approve <gate> [--reject]');
       printRun(approve(session, rest[0], opts.reject ?? false, opts.note, id, opts.slice), session.config);
       return 0;
     }
     case 'abort': {
-      const session = openSession(process.cwd());
+      const session = openSession(process.cwd(), undefined, id);
       const r = abortRun(session, opts.note, id);
       printRun(r, session.config, r.note ? `note: ${r.note}\n\n` : '');
       return 0;
     }
     case 'mode': {
-      const session = openSession(process.cwd());
+      const session = openSession(process.cwd(), undefined, id);
       if (rest[0] !== 'guided' && rest[0] !== 'orchestrated') throw new GenieError('usage: genie mode guided|orchestrated');
       printRun(setMode(session, rest[0], id), session.config);
       return 0;
     }
     case 'hook': {
-      if (rest[0] !== 'pre-tool-use') throw new GenieError('usage: genie hook pre-tool-use');
+      if (rest[0] === 'user-prompt-expansion') {
+        // Never block or fail the user's prompt: without a grant, the approval itself reports why.
+        try {
+          promptExpansion(JSON.parse(readFileSync(0, 'utf8')) as PromptExpansionInput);
+        } catch (err) {
+          console.error(`genie hook: ${(err as Error).message}`);
+        }
+        return 0;
+      }
+      if (rest[0] !== 'pre-tool-use') throw new GenieError('usage: genie hook pre-tool-use|user-prompt-expansion');
       // Hook failures must never wedge the session: an unreadable payload or an engine bug is
       // reported on stderr and the call proceeds. (Config/state errors while judging a protected
       // action are handled inside preToolUse, which fails closed.)

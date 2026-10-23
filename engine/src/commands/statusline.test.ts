@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -16,9 +16,9 @@ function repo(): string {
   return root;
 }
 
-function genie(root: string, args: string[], input?: string) {
+function genie(root: string, args: string[], input?: string, cwd = root) {
   return spawnSync('node', [CLI, ...args], {
-    cwd: root,
+    cwd,
     input,
     encoding: 'utf8',
     env: { ...process.env, GENIE_HOME: join(root, '.genie-home') },
@@ -28,7 +28,8 @@ function genie(root: string, args: string[], input?: string) {
 /** Runs the status line from an unrelated cwd, as Claude Code does, pointing at `dir` via the payload. */
 function line(dir: string, payload?: string): { stdout: string; status: number | null } {
   const input = payload ?? JSON.stringify({ hook_event_name: 'Status', workspace: { current_dir: dir }, cwd: dir });
-  const res = genie(tmpdir(), ['statusline'], input);
+  // Same GENIE_HOME as the repo's runs (they're sealed with its key), from an unrelated cwd.
+  const res = genie(dir || tmpdir(), ['statusline'], input, tmpdir());
   return { stdout: res.stdout, status: res.status };
 }
 
@@ -73,7 +74,13 @@ describe('genie statusline', () => {
     const root = repo();
     genie(root, ['init']);
     genie(root, ['new', 'Short']);
+    // A live run follows its own config snapshot, so a broken file doesn't blank its line.
     writeFileSync(join(root, '.genie/config.yaml'), 'gates:\n  nope: {}\n');
+    assert.deepEqual(line(root), { stdout: 'genie Short ▸ spec/work · /genie:next\n', status: 0 });
+    // A run whose state was changed outside genie shows nothing rather than unverified progress.
+    const id = readFileSync(join(root, '.genie/runs/CURRENT'), 'utf8').trim();
+    const path = join(root, '.genie/runs', id, 'state.json');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"spec"', '"merge"'));
     assert.deepEqual(line(root), { stdout: '', status: 0 });
   });
 });

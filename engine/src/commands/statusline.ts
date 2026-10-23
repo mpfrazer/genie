@@ -36,7 +36,7 @@ export function statusline(payload: string): string {
     let run = loadRun(root, id);
     if (run.status !== 'active' && run.status !== 'halted') return '';
 
-    const { config } = loadConfig({ root });
+    const config = run.config ?? loadConfig({ root }).config;
     run = recordCost(root, config, run, input) ?? run;
     // Settle config-driven transitions in memory only.
     advance(run, config, { now: new Date().toISOString(), events: [] });
@@ -55,7 +55,7 @@ function recordCost(root: string, config: Config, run: RunState, input: Payload)
   if (total <= (run.budget?.sessions[session] ?? 0)) return undefined;
   try {
     const now = () => new Date().toISOString();
-    return mutateRun({ root, config, now }, run.id, (s, ctx) => chargeCost(s, config, session, total, ctx), {
+    return mutateRun({ root, config, fileConfig: config, pendingConfig: [], now }, run.id, (s, ctx) => chargeCost(s, config, session, total, ctx), {
       lockTimeoutMs: 200,
     }).state;
   } catch {

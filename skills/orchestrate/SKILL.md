@@ -14,7 +14,7 @@ node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs"
 
 Below it's written `GENIE`. Always type the full command: it isn't on PATH, and the plugin-root variable isn't set in Bash.
 
-The engine owns the run. Never edit `.genie/runs/*/state.json`, `log.jsonl`, `CURRENT`, or `evidence/`, and never run `GENIE approve`. Hooks deny all of these. Only the user approves human gates, with `/genie:approve`.
+The engine owns the run. Never edit `.genie/runs/*/state.json`, `log.jsonl`, `CURRENT`, or `evidence/`, and never run `GENIE approve`. Hooks deny all of these. Only the user approves human gates, with `/genie:approve`. If `GENIE` reports that the run was changed outside genie, stop and tell the user. Don't try to repair the state: only they can accept it (`/genie:approve state`) or abort it.
 
 Orchestrated mode differs from guided mode (`genie:drive`) in two ways. It keeps going across stages without stopping after each one. And in the implement stage, every ready slice runs at once, each in its own git worktree on its own branch. The engine merges each slice onto the run branch once it passes its gates, and sends it back if it conflicts.
 
@@ -44,6 +44,7 @@ You don't need to do any of this; it's here so you can explain it.
 - **Cleanup.** Once implement passes, the remaining worktrees go, and later stages run in the main checkout as in guided mode.
 - **Failures.** A failed gate reworks only that slice or stage. Once a gate's retry budget is used up, it escalates to the user or halts the run. So does a slice that has used `budgets.max_iterations_per_slice` rounds of work.
 - **The plan.** In orchestrated mode the `plan-reviewer` agent decides `plan.approved` instead of the user, so the run goes straight from the spec approval to implementation unless the reviewer sends the plan back.
+- **Config.** A run follows the config it started with. If `configPending` is in `next --json`, the user has edited `.genie/config.yaml` since. Mention it in your report: `/genie:approve config` applies it.
 - **Budgets.** Time counts while the run is orchestrated and not waiting on the user. Cost comes from the Claude Code status line, so it's only tracked when the user has genie's status line set up (`/genie:init` offers it).
 
 ## When to stop

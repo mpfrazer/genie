@@ -46,6 +46,8 @@ export interface VerdictInput {
   by: string;
   note?: string;
   evidence?: string[];
+  /** For human verdicts: the grant (grants.ts) the user's typed command carried. */
+  grant?: string;
 }
 
 export interface WorkOptions {
@@ -426,6 +428,7 @@ export function recordVerdict(state: RunState, config: Config, input: VerdictInp
     attempt: gs.attempts,
     note: input.note,
     evidence: input.evidence,
+    ...(input.grant ? { grant: input.grant } : {}),
     source,
     gateConfig: gc,
   };

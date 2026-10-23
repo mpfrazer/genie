@@ -88,6 +88,11 @@ function decideOne(action: ProtectedAction, input: PolicyInput): Decision | unde
         decision: 'deny',
         reason: `genie: ${action.path} is engine-owned run state. Change it only through the genie CLI (done, gate, approve, abort).`,
       };
+    case 'key_access':
+      return {
+        decision: 'deny',
+        reason: `genie: ${action.path} is the key that seals run state. Nothing in a session needs to read or change it.`,
+      };
     case 'config_write':
       if (!config) return undefined;
       return {

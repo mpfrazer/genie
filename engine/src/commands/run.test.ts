@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const CLI = fileURLToPath(new URL('../cli.ts', import.meta.url));
+import { grant } from './test-helpers.ts';
 
 function sh(root: string, cmd: string[]) {
   const res = spawnSync(cmd[0]!, cmd.slice(1), { cwd: root, encoding: 'utf8' });
@@ -26,7 +27,9 @@ function repo(): string {
   return root;
 }
 
+/** Runs genie; `approve` and `abort` run as the user typing the slash command would. */
 function genie(root: string, args: string[], input?: string) {
+  if (args[0] === 'approve' || args[0] === 'abort') grant(root, join(root, '.genie-home'), args);
   return spawnSync('node', [CLI, ...args], {
     cwd: root,
     input,

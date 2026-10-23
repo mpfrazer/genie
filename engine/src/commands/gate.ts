@@ -2,13 +2,15 @@ import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { GenieError } from '../errors.ts';
 import { runChecks, type CheckResult } from '../checks.ts';
-import { currentGate, gateConfig, nextAction, recordVerdict, resolveVerdictSlice } from '../engine.ts';
+import { advance, currentGate, gateConfig, nextAction, recordVerdict, resolveVerdictSlice } from '../engine.ts';
 import { GATES, isSliceGate, type GateName } from '../pipeline.ts';
 import type { Config } from '../config/types.ts';
 import { findSlice, type GateState, type RunState, type Verdict } from '../state.ts';
-import { runDir } from '../store.ts';
+import { currentRunId, loadRun, logTail, runDir } from '../store.ts';
+import { redeemGrant } from '../grants.ts';
+import { TamperError } from '../seal.ts';
 import { extendBudget } from '../budget.ts';
-import { mutateRun, type Session } from '../session.ts';
+import { configDiff, mutateRun, type Session } from '../session.ts';
 import { settle } from '../orchestrate.ts';
 import type { RunView } from './run.ts';
 
@@ -126,12 +128,64 @@ export function agentVerdict(session: Session, opts: AgentVerdictOptions): RunVi
  * (the /genie:approve command); hooks block the model from calling it through Bash.
  */
 export function approve(session: Session, gateName: string, reject: boolean, note?: string, id?: string, slice?: string): RunView {
-  if (gateName === 'budget') return approveBudget(session, reject, note, id, slice);
+  const runId = id ?? currentRunId(session.root);
+  if (!runId) throw new GenieError('no active run');
+  // Only a command the user typed carries a grant (grants.ts); a script calling this finds none.
+  const grant = redeemGrant(session.root, runId, 'approve', { target: gateName, reject, ...(slice ? { slice } : {}) }, session.now());
+  if (gateName === 'state') return acceptState(session, reject, note, runId, slice, grant.nonce);
+  if (gateName === 'budget') return approveBudget(session, reject, note, runId, slice);
+  if (gateName === 'config') return applyConfig(session, reject, note, runId, slice, grant.nonce);
   const gate = parseGate(gateName);
   const { state } = mutateRun(session, id, (s, ctx) =>
-    recordVerdict(s, session.config, { gate, slice, verdict: reject ? 'fail' : 'pass', source: 'human', by: 'human', note }, ctx),
+    recordVerdict(s, session.config, { gate, slice, verdict: reject ? 'fail' : 'pass', source: 'human', by: 'human', note, grant: grant.nonce }, ctx),
   );
   return runView(session, settle(session, state));
+}
+
+/**
+ * `approve state`: a human accepts a run that failed verification (changed outside genie, or
+ * written by a genie that didn't seal state) as it now stands, and genie seals it again.
+ */
+function acceptState(session: Session, reject: boolean, note: string | undefined, id: string, slice: string | undefined, grant: string): RunView {
+  if (reject) throw new GenieError('to stop a run whose state you don\'t accept, abort it (/genie:abort)');
+  if (slice) throw new GenieError('the state belongs to the run; --slice does not apply');
+  let problem: string;
+  try {
+    loadRun(session.root, id);
+    throw new GenieError(`run ${id} verifies; there is nothing to accept`);
+  } catch (err) {
+    if (!(err instanceof TamperError)) throw err;
+    problem = err.message.split('. A human can')[0]!;
+  }
+  const { state } = mutateRun(
+    session,
+    id,
+    (s, ctx) => {
+      // The log is accepted as it stands: the chain restarts from what's there now.
+      const tail = logTail(session.root, id);
+      if (tail) s.logMac = tail;
+      else delete s.logMac;
+      ctx.events.push({ ts: ctx.now, run: s.id, type: 'state.accepted', by: 'human', source: 'human', grant, note: note ?? problem });
+      s.updatedAt = ctx.now;
+    },
+    { unverified: true },
+  );
+  return runView(session, settle(session, state));
+}
+
+/** `approve config`: a human applies .genie/config.yaml's current contents to the live run. */
+function applyConfig(session: Session, reject: boolean, note: string | undefined, id: string, slice: string | undefined, grant: string): RunView {
+  if (reject) throw new GenieError('nothing to reject: the run keeps its config until you apply the new one');
+  if (slice) throw new GenieError('the config belongs to the run; --slice does not apply');
+  const { state } = mutateRun(session, id, (s, ctx) => {
+    const changed = s.config ? configDiff(s.config, session.fileConfig) : [];
+    if (changed.length === 0) throw new GenieError(`run ${id} already follows .genie/config.yaml; there is nothing to apply`);
+    s.config = session.fileConfig;
+    ctx.events.push({ ts: ctx.now, run: s.id, type: 'config.applied', by: 'human', source: 'human', grant, note: note ?? changed.join(', '), changed });
+    s.updatedAt = ctx.now;
+    advance(s, s.config, ctx);
+  });
+  return runView({ ...session, config: session.fileConfig }, settle(session, state));
 }
 
 /** `approve budget`: a human lets a run that went over budget carry on. */
