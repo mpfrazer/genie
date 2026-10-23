@@ -94,17 +94,17 @@ export function agentVerdict(session: Session, opts: AgentVerdictOptions): RunVi
     throw new GenieError(`verdict must be pass, fail, or needs_human (got "${opts.verdict}")`);
   }
   if (!opts.by) throw new GenieError('--by <evaluator> is required for agent verdicts');
-  if (opts.findings && !existsSync(opts.findings)) throw new GenieError(`findings file ${opts.findings} not found`);
+  // The findings file is the audit trail for why the agent decided as it did, pass or fail.
+  const findings = opts.findings;
+  if (!findings) throw new GenieError('--findings <file> is required for agent verdicts');
+  if (!existsSync(findings)) throw new GenieError(`findings file ${findings} not found`);
 
   const { state } = mutateRun(session, opts.id, (s, ctx) => {
     const t = target(s, session.config, gate, opts.slice);
-    const evidence: string[] = [];
-    if (opts.findings) {
-      mkdirSync(evidenceDir(session, s.id), { recursive: true });
-      const dest = join(evidenceDir(session, s.id), `${evidencePrefix(gate, t)}.${basename(opts.findings)}`);
-      copyFileSync(opts.findings, dest);
-      evidence.push(dest);
-    }
+    mkdirSync(evidenceDir(session, s.id), { recursive: true });
+    const dest = join(evidenceDir(session, s.id), `${evidencePrefix(gate, t)}.${basename(findings)}`);
+    copyFileSync(findings, dest);
+    const evidence = [dest];
     recordVerdict(
       s,
       session.config,

@@ -4,7 +4,7 @@ import { advance, completeWork, recordVerdict, type Ctx } from '../engine.ts';
 import { resolveConfig } from '../config/load.ts';
 import type { Config, ConfigLayer } from '../config/types.ts';
 import { newRunState, type RunState } from '../state.ts';
-import { classify, isStatePath } from './classify.ts';
+import { classifyCommands, isStatePath } from './classify.ts';
 import { callerFrom, decide, type PolicyInput } from './policy.ts';
 import { simpleCommands } from './shell.ts';
 
@@ -24,7 +24,7 @@ function check(
 ) {
   const cfg = opts.config === null ? undefined : (opts.config ?? config());
   const input: PolicyInput = {
-    actions: simpleCommands(command).flatMap((argv) => classify(argv, cfg)),
+    actions: classifyCommands(simpleCommands(command), cfg, '/repo'),
     caller: callerFrom(opts.agent),
     config: cfg,
     run: opts.run,
@@ -88,6 +88,13 @@ describe('invariants (always on)', () => {
     assert.equal(check('mv /tmp/x .genie/runs/CURRENT')?.decision, 'deny');
     assert.equal(check('cat .genie/runs/r1/state.json')?.decision, undefined);
     assert.equal(check('cat > .genie/runs/r1/spec.md')?.decision, undefined);
+    // Moving into the run dir to read it is not a write (seen in a live run)...
+    assert.equal(check('cd .genie/runs/r1 && ls -la && cat intent.md')?.decision, undefined);
+    // ...but relative writes from there still resolve to run state.
+    assert.equal(check('cd .genie/runs/r1 && echo x > state.json')?.decision, 'deny');
+    assert.equal(check('cd .genie && cd runs/r1 && rm log.jsonl')?.decision, 'deny');
+    assert.equal(check('cd /repo/.genie/runs/r1; cp /tmp/x state.json')?.decision, 'deny');
+    assert.equal(check('cd .genie/runs/r1 && echo x > notes.md')?.decision, undefined);
     assert.ok(isStatePath('/repo/.genie/runs/r1/evidence/x.log'));
     assert.ok(isStatePath('/repo/.genie/runs/r1/state.json.123.tmp'));
     assert.ok(!isStatePath('/repo/.genie/runs/r1/plan.md'));

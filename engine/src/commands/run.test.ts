@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -108,7 +108,13 @@ describe('guided run through the CLI', () => {
     assert.equal(view.action.evaluator, 'adversarial-reviewer');
     assert.equal(view.action.slice.id, 'S1');
 
-    ok(root, ['gate', 'slice.reviewed', '--verdict', 'pass', '--by', 'adversarial-reviewer', '--slice', 'S1']);
+    const review = ['gate', 'slice.reviewed', '--verdict', 'pass', '--by', 'adversarial-reviewer', '--slice', 'S1'];
+    assert.match(genie(root, review).stderr, /--findings <file> is required/);
+    const findings = join(view.run.dir, 'review', 'slice.reviewed.S1.md');
+    mkdirSync(dirname(findings), { recursive: true });
+    writeFileSync(findings, 'No blocking findings.');
+    ok(root, [...review, '--findings', findings]);
+    assert.match(readFileSync(join(view.run.dir, 'evidence', 'slice.reviewed.S1.1.slice.reviewed.S1.md'), 'utf8'), /No blocking/);
     view = nextJson(root);
     assert.deepEqual(view.action.slice, s2, 'S2 is up once S1 passes');
     assert.equal(view.run.stage, 'implement');
