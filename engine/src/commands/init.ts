@@ -67,7 +67,7 @@ export function init(opts: InitOptions): InitResult {
     '',
   ].join('\n');
   writeAtomic(path, header + YAML.stringify(layer));
-  writeAtomic(join(genieDir(root), '.gitignore'), 'runs/\n');
+  writeAtomic(join(genieDir(root), '.gitignore'), 'runs/\nworktrees/\n');
 
   return { root, path, profile, ecosystem: found.ecosystem, layer, notes };
 }
