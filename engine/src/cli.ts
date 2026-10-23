@@ -6,6 +6,7 @@ import { init } from './commands/init.ts';
 import { abortRun, done, newRun, next, status, type RunView } from './commands/run.ts';
 import { agentVerdict, approve, runGate } from './commands/gate.ts';
 import { hookOutput, preToolUse, type PreToolUseInput } from './commands/hook.ts';
+import { statusline } from './commands/statusline.ts';
 import { describeAction, describeChecks, describeRun } from './format.ts';
 import { loadConfig } from './config/load.ts';
 import { openSession } from './session.ts';
@@ -33,6 +34,7 @@ Usage: genie <command> [options]
   it can be left out when only one slice is waiting.
   abort [--note <text>]                  Abort the run
   hook pre-tool-use                      Claude Code PreToolUse hook (reads the payload on stdin)
+  statusline                             One-line run status for Claude Code's statusLine (payload on stdin)
 
 Global: --json  machine-readable output    --run-id <id>  target a specific run    --version`;
 
@@ -169,6 +171,17 @@ function main(argv: string[]): number {
       } catch (err) {
         console.error(`genie hook: ${(err as Error).message}`);
       }
+      return 0;
+    }
+    case 'statusline': {
+      let payload = '';
+      try {
+        payload = readFileSync(0, 'utf8');
+      } catch {
+        // No readable stdin: nothing to show.
+      }
+      const line = statusline(payload);
+      if (line) console.log(line);
       return 0;
     }
     default:

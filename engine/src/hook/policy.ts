@@ -78,6 +78,11 @@ function decideOne(action: ProtectedAction, input: PolicyInput): Decision | unde
         reason:
           'genie: human gates can only be approved by the user. Ask them to run `/genie:approve <gate>` (or `--reject`).',
       };
+    case 'abort':
+      return {
+        decision: 'deny',
+        reason: 'genie: aborting a run is the user\'s decision. Ask them to run `/genie:abort` (optionally with `--note "why"`).',
+      };
     case 'state_write':
       return {
         decision: 'deny',

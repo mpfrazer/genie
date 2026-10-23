@@ -262,12 +262,12 @@ The Deploy and Release columns are **stages**; the other columns are gates. `gen
 
 | Primitive | Use in genie |
 |---|---|
-| **Slash commands** | Built: `/genie:init`, `/genie:new <intent>`, `/genie:next` (guided step), `/genie:status`, `/genie:approve <gate>`. Planned: `/genie:run` (orchestrate), `/genie:abort`. |
+| **Slash commands** | Built: `/genie:init`, `/genie:new <intent>`, `/genie:next` (guided step), `/genie:status`, `/genie:approve <gate>`, `/genie:abort`. The last two are user-only: `disable-model-invocation`, and the hook denies the model running `genie approve` / `genie abort`. Planned: `/genie:run` (orchestrate). |
 | **Skills** | The stage playbooks (`spec`, `decompose`, `implement`, `review`, `pr`, `release`). They are loaded on demand so each stage gets precise instructions without bloating context. |
 | **Subagents** | `spec-writer`, `decomposer`, `implementer`, `adversarial-reviewer`, `intent-reviewer`, `integrator`, `release-manager`. Each has scoped tools. Reviewers are read-only. |
 | **Hooks** | Enforcement: `PreToolUse` blocks `git push`, `gh pr merge`, and deploy/release commands without a passing gate. `SessionStart` loads active-run context. `Stop`/`SubagentStop` record stage completion. |
 | **State / engine** | See §7. |
-| **Status line** | Plugins can't ship the main status line; only user/project `settings.json` can set it. `/genie:init` can offer to add one to the project settings that calls `genie status --line`. |
+| **Status line** | Plugins can't ship the main status line; only user/project `settings.json` can set it. `/genie:init` offers to add `statusLine` to `.claude/settings.local.json`, which is machine-local because the plugin path is absolute. It runs `genie statusline`, which reads Claude Code's payload (`workspace.current_dir`) and prints e.g. `genie Add a greeting ▸ spec/exit · ⏸ /genie:approve spec.approved`. It prints nothing without an active run, and never fails. `/genie:init --statusline` repairs the path after a plugin update. |
 
 ### Repo layout (plugin)
 ```

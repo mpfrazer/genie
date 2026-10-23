@@ -63,7 +63,7 @@ export function preToolUse(input: PreToolUseInput): Decision | undefined {
 
   const actions = toolActions(input, config);
   if (actions.length === 0) return undefined;
-  const outward = actions.some((a) => !['approve', 'state_write', 'config_write'].includes(a.kind));
+  const outward = actions.some((a) => !['approve', 'abort', 'state_write', 'config_write'].includes(a.kind));
   if (loadError && outward) {
     return { decision: 'deny', reason: `genie: can't check gates because the config failed to load: ${loadError}` };
   }

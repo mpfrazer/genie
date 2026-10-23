@@ -87,3 +87,24 @@ export function describeChecks(results: CheckResult[]): string {
     )
     .join('\n');
 }
+
+const STATUSLINE_TITLE = 24;
+
+/** The compact one-line form `genie statusline` prints; empty once the run is over. */
+export function describeStatusline(state: RunState, action: Action): string {
+  const title = state.title.length > STATUSLINE_TITLE ? `${state.title.slice(0, STATUSLINE_TITLE - 1)}…` : state.title;
+  const where = `${state.stage}/${state.stages[state.stage].phase}`;
+  switch (action.type) {
+    case 'work':
+      return `genie ${title} ▸ ${where} · /genie:next`;
+    case 'evaluate':
+      return `genie ${title} ▸ ${where} · checking ${action.gate}`;
+    case 'await_human':
+      return `genie ${title} ▸ ${where} · ⏸ /genie:approve ${action.gate}`;
+    case 'halted':
+      return `genie ${title} ▸ halted: ${action.reason}`;
+    case 'aborted':
+    case 'done':
+      return '';
+  }
+}
