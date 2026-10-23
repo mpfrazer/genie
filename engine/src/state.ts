@@ -30,18 +30,31 @@ export interface RunState {
   status: RunStatus;
   haltReason?: string;
   stage: StageName;
+  /** Branch the run's work is committed on, and the branch it lands in. */
+  branch: string;
+  base: string;
   createdAt: string;
   updatedAt: string;
   stages: Record<StageName, StageState>;
   gates: Record<GateName, GateState>;
 }
 
-export function newRunState(id: string, title: string, mode: Mode, now: string): RunState {
+export interface NewRun {
+  id: string;
+  title: string;
+  mode: Mode;
+  branch: string;
+  base: string;
+}
+
+export function newRunState({ id, title, mode, branch, base }: NewRun, now: string): RunState {
   return {
     version: 1,
     id,
     title,
     mode,
+    branch,
+    base,
     status: 'active',
     stage: STAGES[0],
     createdAt: now,

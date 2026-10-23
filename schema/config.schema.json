@@ -134,6 +134,10 @@
             "deploy.healthy",
             "release.approved"
           ]
+        },
+        "ci_command": {
+          "type": "string",
+          "description": "Waits for the run branch's CI and exits non-zero if it fails; evaluated by the pr.ready gate (e.g. gh pr checks --watch)."
         }
       }
     },

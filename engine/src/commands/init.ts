@@ -40,7 +40,11 @@ export function init(opts: InitOptions): InitResult {
     version: 1,
     profile,
     commands: found.commands,
-    forge: { provider: found.provider, base_branch: found.baseBranch },
+    forge: {
+      provider: found.provider,
+      base_branch: found.baseBranch,
+      ...(found.provider === 'github' ? { ci_command: 'gh pr checks --watch --interval 15' } : {}),
+    },
   };
 
   // Deploy can't run without a command; leave it off until one is configured.

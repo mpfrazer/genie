@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import YAML from 'yaml';
 import { GenieError } from './errors.ts';
 import { init } from './commands/init.ts';
-import { abortRun, done, newRun, status, type RunView } from './commands/run.ts';
+import { abortRun, done, newRun, next, status, type RunView } from './commands/run.ts';
 import { agentVerdict, approve, runGate } from './commands/gate.ts';
 import { hookOutput, preToolUse, type PreToolUseInput } from './commands/hook.ts';
 import { describeAction, describeChecks, describeRun } from './format.ts';
@@ -17,7 +17,7 @@ Usage: genie <command> [options]
 
   init [--profile <name>] [--force]      Write .genie/config.yaml for this repo
   config                                 Print the resolved configuration
-  new <intent...> [--file <path>] [--mode guided|orchestrated]
+  new <intent...> [--file <path>|-] [--mode guided|orchestrated]
                                          Start a run
   status                                 Show the run and what happens next
   next                                   Show only what happens next
@@ -88,7 +88,7 @@ function main(argv: string[]): number {
     }
     case 'new': {
       const session = openSession(process.cwd());
-      const intent = opts.file ? readFileSync(opts.file, 'utf8') : rest.join(' ');
+      const intent = opts.file ? readFileSync(opts.file === '-' ? 0 : opts.file, 'utf8') : rest.join(' ');
       if (opts.mode && opts.mode !== 'guided' && opts.mode !== 'orchestrated') {
         throw new GenieError(`--mode must be guided or orchestrated (got "${opts.mode}")`);
       }
@@ -102,8 +102,11 @@ function main(argv: string[]): number {
     }
     case 'next': {
       const session = openSession(process.cwd());
-      const v = status(session, id);
-      print(v.action, describeAction(v.action));
+      const v = next(session, id);
+      const feedback = v.feedback
+        ? `Reworking after ${v.feedback.gate} failed${v.feedback.note ? `: ${v.feedback.note}` : ''}${v.feedback.evidence?.length ? `\n  evidence: ${v.feedback.evidence.join(', ')}` : ''}\n`
+        : '';
+      print(v, `${feedback}${describeAction(v.action)}`);
       return 0;
     }
     case 'done': {

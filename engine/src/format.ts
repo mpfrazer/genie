@@ -17,7 +17,7 @@ const PHASE_MARK: Record<StagePhase, string> = {
 export function describeAction(action: Action): string {
   switch (action.type) {
     case 'work':
-      return `Work on ${action.stage}: ${action.instructions}${action.artifact ? ` (write ${action.artifact})` : ''}\n  then: genie done ${action.stage}`;
+      return `Work on ${action.stage}${action.agent ? ` (${action.agent} subagent)` : ''}: ${action.instructions}${action.artifact ? ` (write ${action.artifact})` : ''}\n  then: genie done ${action.stage}${action.agent ? ` --by ${action.agent}` : ''}`;
     case 'evaluate':
       return action.kind === 'automated'
         ? `Evaluate ${action.gate} (automated: ${action.checks.join(', ') || 'no checks'})\n  run: genie gate ${action.gate} --run`

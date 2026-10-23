@@ -11,7 +11,7 @@ const NO_DEPLOY: ConfigLayer = { stages: { deploy: { enabled: false } } };
 function setup(profile: ProfileName = 'service', layer: ConfigLayer = {}): { state: RunState; config: Config; ctx: Ctx } {
   const config = resolveConfig(profile, [NO_DEPLOY, layer]);
   const ctx: Ctx = { now: '2026-10-22T00:00:00.000Z', events: [] };
-  const state = newRunState('r1', 'test run', 'guided', ctx.now);
+  const state = newRunState({ id: 'r1', title: 'test run', mode: 'guided', branch: 'genie/r1', base: 'main' }, ctx.now);
   advance(state, config, ctx);
   return { state, config, ctx };
 }

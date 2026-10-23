@@ -31,6 +31,8 @@ export interface Config {
     base_branch: string;
     branch_prefix: string;
     pr_draft_until?: GateName;
+    /** Waits for the run branch's CI and exits non-zero if it fails; evaluated by pr.ready. */
+    ci_command?: string;
   };
   stages: Record<StageName, { enabled: boolean }>;
   gates: Record<GateName, GateConfig>;
