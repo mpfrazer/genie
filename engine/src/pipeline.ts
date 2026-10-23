@@ -30,6 +30,17 @@ export const GATES = [
 ] as const;
 export type GateName = (typeof GATES)[number];
 
+/** Gates evaluated once per slice of the plan, inside the implement stage. */
+export const SLICE_GATES = ['slice.verified', 'slice.reviewed'] as const;
+export type SliceGateName = (typeof SLICE_GATES)[number];
+/** Gates evaluated once per run. */
+export type RunGateName = Exclude<GateName, SliceGateName>;
+export const RUN_GATES = GATES.filter((g): g is RunGateName => !(SLICE_GATES as readonly string[]).includes(g));
+
+export function isSliceGate(gate: GateName): gate is SliceGateName {
+  return (SLICE_GATES as readonly string[]).includes(gate);
+}
+
 export interface StageDef {
   name: StageName;
   /** False for stages that consist only of gates. */
@@ -45,9 +56,9 @@ export interface StageDef {
   /** Work must be committed on the run branch, ahead of the base branch, before it counts as done. */
   onRunBranch?: boolean;
   /** Gates that must resolve before work starts (e.g. approval to deploy). */
-  entryGates: GateName[];
+  entryGates: RunGateName[];
   /** Gates that must resolve before the stage passes. */
-  exitGates: GateName[];
+  exitGates: RunGateName[];
 }
 
 export interface GateDef {
@@ -71,22 +82,23 @@ export const STAGE_DEFS: Record<StageName, StageDef> = {
   decompose: {
     name: 'decompose',
     hasWork: true,
-    artifact: 'plan.md',
+    artifact: 'plan.yaml',
     instructions:
-      'Decompose spec.md into independently implementable, testable slices with dependencies, written to plan.md.',
+      'Decompose spec.md into independently implementable, testable slices with dependencies, written to plan.yaml.',
     skill: 'genie:decompose',
     entryGates: [],
     exitGates: ['plan.approved'],
   },
-  // Slices run as a single unit until orchestrated mode adds per-slice state.
+  // Work happens per slice: each slice of plan.yaml is implemented and passes the SLICE_GATES on its
+  // own. The stage passes once every slice has.
   implement: {
     name: 'implement',
     hasWork: true,
-    instructions: 'Implement the slices in plan.md, with tests, committed on the run branch.',
+    instructions: 'Implement this slice of plan.yaml, with tests, committed on the run branch.',
     agent: 'implementer',
     onRunBranch: true,
     entryGates: [],
-    exitGates: ['slice.verified', 'slice.reviewed'],
+    exitGates: [],
   },
   integrate: {
     name: 'integrate',
@@ -169,8 +181,9 @@ export const GATE_DEFS: Record<GateName, GateDef> = {
   'release.approved': { name: 'release.approved', description: 'Approval to version, tag, and publish', onFail: 'halt' },
 };
 
-/** The stage whose entry or exit gates include the given gate. */
+/** The stage whose entry or exit gates include the given gate (slice gates belong to implement). */
 export function stageOfGate(gate: GateName): StageName {
+  if (isSliceGate(gate)) return 'implement';
   for (const stage of STAGES) {
     const def = STAGE_DEFS[stage];
     if (def.entryGates.includes(gate) || def.exitGates.includes(gate)) return stage;

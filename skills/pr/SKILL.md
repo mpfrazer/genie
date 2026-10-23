@@ -13,7 +13,7 @@ Engine CLI: `node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs"` (`GENIE` below)
 3. Write the PR description to `<run dir>/pr-body.md`:
    - **What**: one sentence.
    - **Why**: from intent.md.
-   - **Changes**: by slice from plan.md.
+   - **Changes**: by slice from plan.yaml, including any fix-up slices (`genie status` lists them).
    - **Testing**: how it was verified.
    - **Footer**: `genie run <run id>`.
 4. Open the PR with a Conventional Commits title. Squash merges make the PR title the commit message:

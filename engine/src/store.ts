@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { GenieError } from './errors.ts';
-import type { RunState } from './state.ts';
+import { migrateState, type RunState } from './state.ts';
 import type { GateName, StageName } from './pipeline.ts';
 
 /** An event as emitted by the engine; the store stamps `ts` and `run`. */
@@ -10,6 +10,8 @@ export interface LogEventBody {
   type: string;
   stage?: StageName;
   gate?: GateName;
+  /** For slice-level events: the slice id. */
+  slice?: string;
   verdict?: string;
   by?: string;
   attempt?: number;
@@ -57,7 +59,7 @@ export function loadRun(root: string, id?: string): RunState {
   if (!runId) throw new GenieError('no active run (start one with /genie:new or `genie new "<intent>"`)');
   const path = join(runDir(root, runId), 'state.json');
   if (!existsSync(path)) throw new GenieError(`run ${runId} not found`);
-  return JSON.parse(readFileSync(path, 'utf8')) as RunState;
+  return migrateState(JSON.parse(readFileSync(path, 'utf8')), runId);
 }
 
 export function saveRun(root: string, state: RunState): void {

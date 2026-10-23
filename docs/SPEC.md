@@ -48,8 +48,8 @@ Each stage has optional **entry gates** (which must pass before its work starts)
 | Stage | Entry gates | Work | Exit gates |
 |---|---|---|---|
 | `spec` | | write `spec.md` | `spec.approved` |
-| `decompose` | | write `plan.md` | `plan.approved` |
-| `implement` | | code + tests | `slice.verified`, `slice.reviewed` |
+| `decompose` | | write `plan.yaml` (validated) | `plan.approved` |
+| `implement` | | code + tests, **per slice** | per slice: `slice.verified`, `slice.reviewed` |
 | `integrate` | | merge slices onto the run branch | `integration.verified` |
 | `pr` | | push, open PR | `pr.ready`, `intent.reviewed` |
 | `merge` | `pr.approved` | merge | |
@@ -63,15 +63,53 @@ The gates:
 |---|---|---|---|---|
 | G1 | `spec.approved` | human | Spec is complete and matches intent | Revise spec |
 | G2 | `plan.approved` | human (guided) / agent (orchestrated) | Slices cover the spec, are independent enough, the DAG is acyclic, sizing is reasonable | Re-decompose |
-| G3 | `slice.verified` | automated | Build, lint, typecheck, tests (repo-defined commands) | Back to Implement (retry budget) |
-| G4 | `slice.reviewed` | agent (adversarial) | Correctness, security, test adequacy, scope creep vs. slice | Back to Implement with findings |
-| G5 | `integration.verified` | automated | Full suite on the integrated branch | Identify the offending slice, back to Implement |
+| G3 | `slice.verified` | automated | Build, lint, typecheck, tests (repo-defined commands) | Back to that slice (retry budget) |
+| G4 | `slice.reviewed` | agent (adversarial) | Correctness, security, test adequacy, scope creep vs. slice | Back to that slice with findings |
+| G5 | `integration.verified` | automated | Full suite on the integrated branch | Back to Implement as a fix-up slice |
 | G6 | `pr.ready` | automated | PR created, description generated, CI green | Fix and re-push |
 | G7 | `intent.reviewed` | agent | Final diff vs. original **intent** (not spec): did we build the right thing? | Back to Spec or Decompose |
 | G8 | `pr.approved` | human | Human (or required reviewers) approve | Address review comments, back to Implement |
 | G9 | `build.passed` | automated | Release build artifact produced | Halt |
 | G10 | `deploy.approved` / `deploy.healthy` | human + automated | Approval to deploy; post-deploy health checks | Rollback hook, halt |
 | G11 | `release.approved` | human | Version, changelog, tag, publish | Halt |
+
+### 3.1 Plan and slices
+
+**plan.yaml** is the decompose stage's contract (schema: `schema/plan.schema.json`):
+
+```yaml
+slices:
+  - id: S1                 # branch-safe: letter, then letters/digits/-/_ (max 32)
+    title: Greeting for valid names
+    goal: greet(name) returns "Hello, <name>!"
+    covers: [R1, R2]       # requirement ids from spec.md
+    touches: [src/greet.js] # optional
+    tests: [greet('Ada') returns 'Hello, Ada!']
+    depends_on: []
+```
+
+`genie done decompose` validates it and reports every problem at once:
+- the schema
+- unique ids, and dependencies that exist and aren't self-references
+- no dependency cycles (reported as a path, e.g. `A → C → B → A`)
+- every requirement id (`R<n>`) in spec.md covered by some slice, and no slice covering an id spec.md doesn't have (skipped if the spec numbers no requirements)
+
+The validated plan is then **snapshotted into run state**, so later edits to the file can't silently change a run in progress. Redoing decompose records the new plan.
+
+**Per-slice state.** Each slice has its own phase (`work` → `exit` → `passed`), author, and its own `slice.verified` / `slice.reviewed` gate state: status, attempts, failures, and agent pre-review. These gates are tuned under `gates:` like any other, but they're evaluated once per slice.
+- A slice is **ready** once every slice in its `depends_on` has passed.
+- A failed slice gate reworks **only that slice**, against its own retry budget, escalation, and halt rules.
+- The implement stage passes once every slice has.
+- The author rule applies per slice: whoever did a slice's work can't review it.
+
+**Fix-up slices.** When a run-level gate routes the run back to implement (`integration.verified`, or a human rejecting `pr.approved`), the engine appends a fix-up slice `F<n>`. It records which gate it `fixes`, its feedback is that gate's failed verdict, and it goes through the same slice gates. A fix is reviewed like any other change, and the passed slices aren't disturbed. A rework that goes back to spec or decompose discards the slices; the next plan replaces them.
+
+**Actions.**
+- `nextActions(state, config)` returns everything actionable now, in plan order. In the implement stage that's one action per ready slice: its work, its pending gate, or a human decision when that gate escalated. Elsewhere it's exactly one action.
+- `nextAction` is the first of these, and it's what guided mode follows: slices one at a time, in plan order, each through its gates before the next starts.
+- An orchestrator can run the whole `nextActions` list concurrently. `genie next --json` exposes it as `actions`, each with its own `feedback`.
+
+**State version 2.** Older v1 state upgrades on load. Runs still planning (at spec, or decompose before its exit gates) and finished or aborted runs upgrade cleanly. An active v1 run past planning has no slices to resume, so it loads as **halted** with an explanation. `genie abort` still works on it.
 
 ## 4. Gates
 
@@ -134,7 +172,7 @@ Not yet verified: whether PreToolUse fires for user-typed `! cmd` bash-mode comm
 |---|---|---|
 | Approve | `genie approve …` | Always denied: the model can't satisfy human gates. |
 | Record | `genie gate … --verdict`, `genie done` | `--by` must equal the caller: the subagent's name, or `claude` for the main session. Authors can't impersonate reviewers. |
-| State write | writes/redirects to `.genie/runs/{CURRENT,<id>,<id>/state.json,log.jsonl,evidence}` | Always denied. Stage artifacts (`spec.md`, `plan.md`) stay writable. |
+| State write | writes/redirects to `.genie/runs/{CURRENT,<id>,<id>/state.json,log.jsonl,evidence}` | Always denied. Stage artifacts (`spec.md`, `plan.yaml`) stay writable. |
 | Config write | writes to `.genie/config.yaml` | **Ask**: the user confirms, because it changes which gates apply. |
 | Push to base | `git push` that updates `forge.base_branch` (explicitly, implicitly from it, `--all`/`--mirror`, delete) | Denied when `enforcement.protect_base_branch` (default on). |
 | Push / open PR | `git push`, `gh pr create`, `glab mr create` | Allowed once the run reaches `pr`. |
@@ -254,7 +292,7 @@ genie/
 │       ├── state.json   # current stage, slice statuses, gate verdicts
 │       ├── intent.md
 │       ├── spec.md
-│       ├── plan.md      # slices + DAG (structured plan.yaml once orchestration lands)
+│       ├── plan.yaml    # slices + DAG (§3.1), with an optional plan.md companion
 │       ├── evidence/    # check logs and review findings, per gate attempt
 │       └── log.jsonl    # append-only event + verdict log
 ```
@@ -277,11 +315,13 @@ Each command prints text by default; pass `--json` for output Claude can parse.
 | `genie init [--profile p]` | Detect commands/forge, write `.genie/config.yaml` and `.genie/.gitignore` |
 | `genie config` | Print the resolved config and its sources |
 | `genie new "<intent>"` | Create a run and write `intent.md` |
-| `genie status` / `genie next` | Show the run, or only the next action |
-| `genie done <stage>` | Mark stage work complete (checks the required artifact), then move to its exit gates |
-| `genie gate <g> --run` | Run an automated gate's checks, record the verdict and its evidence |
-| `genie gate <g> --verdict … --by <agent>` | Record an agent verdict (the stage author is refused) |
-| `genie approve <g> [--reject]` | Record a human decision (see §4.5) |
+| `genie status` / `genie next` | Show the run (with per-slice progress), or only the next actions |
+| `genie done <stage> [--slice <id>]` | Mark stage work complete (checks the required artifact; validates plan.yaml for decompose), or one slice's work in implement |
+| `genie gate <g> --run [--slice <id>]` | Run an automated gate's checks, record the verdict and its evidence |
+| `genie gate <g> --verdict … --by <agent> [--slice <id>]` | Record an agent verdict (the stage or slice author is refused) |
+| `genie approve <g> [--reject] [--slice <id>]` | Record a human decision (see §4.5) |
+
+`--slice` names the slice for slice gates and implement work. It can be left out when exactly one slice is waiting.
 | `genie abort` | Abort the run |
 | `genie hook pre-tool-use` | The enforcement hook (§4.6): reads Claude Code's payload on stdin, prints a deny/ask decision or nothing |
 
@@ -301,7 +341,8 @@ How it works:
   - `implement` is delegated to the `implementer` subagent.
   - Agent gates are delegated to their evaluator (`adversarial-reviewer`, `intent-reviewer`). Each subagent records `done` or its verdict itself, and the hook binds `--by` to the caller.
   - The main session never does a delegated stage's work. If a subagent is blocked, the driver stops and reports. The next delegation resumes from the run branch.
-- **Where the driver stops.** At a human gate, after a gate failure (with a summary of why), when the stage it started on passes, or on an error.
+- **Where the driver stops.** At a human gate, after a gate failure (with a summary of why), when the stage it started on passes (in implement: when the slice it started on passes), or on an error.
+- **Slices.** The implementer and adversarial reviewer each work on one slice per invocation, with the slice in their prompt. Implementer commits carry a `Genie-Slice: <id>` trailer, so reviewers can isolate the slice's commits on the shared run branch.
 - **Run branches.** Each run records `branch` (`forge.branch_prefix` + run id) and `base`. `genie done` refuses `implement` and `integrate` unless the work is committed on the run branch, ahead of the base.
 - **CI gate.** `pr.ready` runs `forge.ci_command`. `genie init` sets it to `gh pr checks --watch --interval 15` for GitHub repos.
 

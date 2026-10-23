@@ -134,7 +134,17 @@ function isGenie(argv: Argv): Argv | undefined {
 }
 
 // genie CLI options that take a value (see OPTIONS in cli.ts); their values aren't positionals.
-const GENIE_VALUE_FLAGS = new Set(['--run-id', '--profile', '--file', '--mode', '--by', '--verdict', '--findings', '--note']);
+const GENIE_VALUE_FLAGS = new Set([
+  '--run-id',
+  '--profile',
+  '--file',
+  '--mode',
+  '--by',
+  '--verdict',
+  '--findings',
+  '--note',
+  '--slice',
+]);
 
 function geniePositionals(args: Argv): string[] {
   const out: string[] = [];

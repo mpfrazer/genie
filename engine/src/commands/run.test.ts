@@ -57,15 +57,25 @@ describe('guided run through the CLI', () => {
       { type: 'work', stage: 'spec', skill: 'genie:spec' },
     );
 
-    writeFileSync(join(view.run.dir, 'spec.md'), '# spec');
+    writeFileSync(join(view.run.dir, 'spec.md'), '# spec\n\n- R1: greet\n- R2: style it\n');
     ok(root, ['done', 'spec']);
     ok(root, ['approve', 'spec.approved']);
-    writeFileSync(join(view.run.dir, 'plan.md'), '# plan');
+
+    const plan = (slices: object[]) => writeFileSync(join(view.run.dir, 'plan.yaml'), JSON.stringify({ slices }));
+    const s1 = { id: 'S1', title: 'Greeting', goal: 'Write the greeting', covers: ['R1'], tests: ['greeting exists'], depends_on: [] };
+    const s2 = { id: 'S2', title: 'Style', goal: 'Style the greeting', covers: ['R2'], tests: ['styled'], depends_on: ['S1'] };
+    plan([s1]);
+    const uncovered = genie(root, ['done', 'decompose']);
+    assert.equal(uncovered.status, 1);
+    assert.match(uncovered.stderr, /plan.yaml is invalid:\n {2}requirements not covered by any slice: R2/);
+    plan([s1, s2]);
     ok(root, ['done', 'decompose']);
     ok(root, ['approve', 'plan.approved']);
 
     view = nextJson(root);
     assert.equal(view.action.agent, 'implementer');
+    assert.deepEqual(view.action.slice, s1);
+    assert.equal(view.actions.length, 1, 'S2 waits for S1');
     const offBranch = genie(root, ['done', 'implement', '--by', 'implementer']);
     assert.equal(offBranch.status, 1);
     assert.match(offBranch.stderr, /run branch genie\/.* \(currently on main\)/);
@@ -82,16 +92,29 @@ describe('guided run through the CLI', () => {
     assert.equal(genie(root, ['gate', 'slice.verified', '--run']).status, 2, 'test fails without `fixed`');
     view = nextJson(root);
     assert.equal(view.action.stage, 'implement');
+    assert.equal(view.action.slice.id, 'S1');
     assert.equal(view.feedback.gate, 'slice.verified');
+    assert.equal(view.feedback.slice, 'S1');
     assert.match(view.feedback.note, /commands\.test failed/);
-    assert.ok(view.feedback.evidence.some((e: string) => e.endsWith('slice.verified.1.commands-test.log')));
+    assert.ok(view.feedback.evidence.some((e: string) => e.endsWith('slice.verified.S1.1.commands-test.log')));
 
     writeFileSync(join(root, 'fixed'), '');
     sh(root, ['git', 'add', 'fixed']);
     sh(root, ['git', 'commit', '-q', '-m', 'fix: make tests pass']);
-    ok(root, ['done', 'implement', '--by', 'implementer']);
+    ok(root, ['done', 'implement', '--slice', 'S1', '--by', 'implementer']);
     assert.equal(nextJson(root).feedback, undefined, 'feedback clears once the rework is done');
-    assert.equal(genie(root, ['gate', 'slice.verified', '--run']).status, 0);
-    assert.equal(nextJson(root).action.evaluator, 'adversarial-reviewer');
+    assert.equal(genie(root, ['gate', 'slice.verified', '--slice', 'S1', '--run']).status, 0);
+    view = nextJson(root);
+    assert.equal(view.action.evaluator, 'adversarial-reviewer');
+    assert.equal(view.action.slice.id, 'S1');
+
+    ok(root, ['gate', 'slice.reviewed', '--verdict', 'pass', '--by', 'adversarial-reviewer', '--slice', 'S1']);
+    view = nextJson(root);
+    assert.deepEqual(view.action.slice, s2, 'S2 is up once S1 passes');
+    assert.equal(view.run.stage, 'implement');
+
+    const status = ok(root, ['status']);
+    assert.match(status, /✓ S1 .*slice\.verified:pass\(1✗\)\s+slice\.reviewed:pass\s+Greeting/);
+    assert.match(status, /▶ S2 +work .*Style/);
   });
 });
