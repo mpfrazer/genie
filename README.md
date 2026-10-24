@@ -22,7 +22,7 @@ or, in one step on Claude Code 2.1.275 or later:
 /plugin install genie --marketplace mpfrazer/genie
 ```
 
-The repository is private, so installing needs git access to `mpfrazer/genie` on that machine. Installs track the marketplace's default branch, and `/plugin marketplace update genie` pulls the latest. Tagged versions are published as [GitHub releases](https://github.com/mpfrazer/genie/releases). Pinning an install to a tag hasn't been verified yet.
+Installs track the marketplace's default branch, and `/plugin marketplace update genie` pulls the latest. Tagged versions are published as [GitHub releases](https://github.com/mpfrazer/genie/releases). Pinning an install to a tag hasn't been verified yet.
 
 Then, in a repo: `/genie:init`. It also offers to add genie's status line to `.claude/settings.local.json`.
 
@@ -50,8 +50,13 @@ genie uses [Semantic Versioning](https://semver.org), driven by [Conventional Co
 Before 1.0, `feat` bumps the minor version and `fix` bumps the patch version. The version of record is `.claude-plugin/plugin.json` (`genie --version` reads it). `scripts/check-versions.mjs` fails CI if any version field drifts from it.
 
 ## Contributing
-All changes go through pull requests. Nothing is pushed straight to `main`. This repo's plan doesn't offer GitHub branch protection, so each clone should enable the local guard, which refuses pushes to `main`:
+All changes go through pull requests. A ruleset on `main` enforces this on GitHub: nobody can push to `main` directly, force-push it, or delete it, and a PR merges only by squash once CI passes (both engine jobs, the plugin check, and the PR title check). Nobody bypasses it, including the owner. Release PRs need the `RELEASE_PLEASE_TOKEN` secret for CI to run on them (see `.github/workflows/release.yml`). The workflows pin each action to a commit SHA.
+
+The local guard refuses pushes to `main` before they reach GitHub:
 
 ```sh
 git config core.hooksPath .githooks
 ```
+
+## License
+[MIT](LICENSE)

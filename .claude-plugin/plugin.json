@@ -5,6 +5,7 @@
   "author": {
     "name": "Mike Frazer"
   },
+  "license": "MIT",
   "keywords": [
     "orchestration",
     "workflow",
