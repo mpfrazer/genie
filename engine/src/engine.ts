@@ -1,20 +1,24 @@
 // The deterministic core: pure transitions over RunState. No I/O; every change emits a log event.
 import { GenieError } from './errors.ts';
 import {
+  DELIVERY_GATES,
   GATE_DEFS,
   SLICE_GATES,
   STAGE_DEFS,
   STAGES,
+  isDeliveryGate,
   isSliceGate,
   stageOfGate,
+  type DeliveryGateName,
   type GateName,
   type RunGateName,
   type SliceGateName,
+  type StageDef,
   type StageName,
 } from './pipeline.ts';
 import type { Config, GateConfig, GateKind } from './config/types.ts';
 import type { PlanSlice } from './plan.ts';
-import { findSlice, newSliceState, type GateState, type RunState, type SliceState, type Verdict } from './state.ts';
+import { findSlice, newSliceState, sliceGate, type GateState, type RunState, type SliceState, type Verdict } from './state.ts';
 import type { LogEvent, LogEventBody } from './store.ts';
 
 export interface Ctx {
@@ -24,8 +28,11 @@ export interface Ctx {
 
 export type VerdictSource = 'automated' | 'agent' | 'human';
 
-/** The slice an action applies to, as planned. */
-export type SliceInfo = PlanSlice & { fixes?: RunGateName };
+/** The slice an action applies to, as planned, with its PR once it has one. */
+export type SliceInfo = PlanSlice & { fixes?: RunGateName; pr?: SliceState['pr'] };
+
+/** A gate evaluated once per slice: the slice gates, and with a PR per slice, the delivery gates. */
+export type PerSliceGate = SliceGateName | DeliveryGateName;
 
 export type Action =
   | { type: 'work'; stage: StageName; instructions: string; artifact?: string; skill?: string; agent?: string; slice?: SliceInfo }
@@ -55,6 +62,8 @@ export interface WorkOptions {
   slice?: string;
   /** The validated plan, recorded when the decompose stage's work is done. */
   plan?: PlanSlice[];
+  /** With a PR per slice: the pull request opened for the slice (`done pr --slice`). */
+  pr?: { number: number; url: string };
 }
 
 function emit(state: RunState, ctx: Ctx, event: LogEventBody): void {
@@ -69,6 +78,31 @@ function touch(state: RunState, ctx: Ctx): void {
 export function gateConfig(state: RunState, config: Config, gate: GateName): GateConfig {
   const { orchestrated, ...base } = config.gates[gate];
   return state.mode === 'orchestrated' && orchestrated ? { ...base, ...orchestrated } : base;
+}
+
+/**
+ * A stage as this run does it. With a PR per slice, every slice's PR has been checked, approved,
+ * and merged by the end of implement: integrate only brings the main checkout up to date with the
+ * base branch, and the pr stage only holds the final intent review over everything that merged.
+ */
+export function stageDef(state: RunState, stage: StageName): StageDef {
+  const def = STAGE_DEFS[stage];
+  if (state.delivery !== 'slice') return def;
+  if (stage === 'integrate') {
+    return { ...def, onRunBranch: false, instructions: `Every slice has merged into ${state.base}: bring the main checkout up to date with it.` };
+  }
+  if (stage === 'pr') return { ...def, hasWork: false, instructions: 'Review everything the run merged against the original intent.' };
+  return def;
+}
+
+/** Where a slice's work lands: the run branch, or with a PR per slice, the base branch. */
+export function landsOn(state: RunState): string {
+  return state.delivery === 'slice' ? state.base : state.branch;
+}
+
+/** Whether a verdict on `gate` is for a slice: always for slice gates, and for the delivery gates while a run with a PR per slice is implementing. */
+export function isPerSliceGate(state: RunState, gate: GateName): gate is PerSliceGate {
+  return isSliceGate(gate) || (state.delivery === 'slice' && state.stage === 'implement' && isDeliveryGate(gate));
 }
 
 function isResolved(gs: GateState, gc: GateConfig): boolean {
@@ -97,7 +131,7 @@ function resolveGates<G extends GateName>(
 }
 
 function gatesInPhase(state: RunState): RunGateName[] {
-  const def = STAGE_DEFS[state.stage];
+  const def = stageDef(state, state.stage);
   const phase = state.stages[state.stage].phase;
   if (phase === 'entry') return def.entryGates;
   if (phase === 'exit') return def.exitGates;
@@ -110,12 +144,25 @@ function sliceReady(state: RunState, slice: SliceState): boolean {
 
 /**
  * Passes every slice whose gates have all resolved, or queues it to merge when it has its own
- * branch. Returns true once all slices have passed.
+ * branch. With a PR per slice, a slice that passes its gates needs its PR opened next, and one
+ * whose PR passes the delivery gates is queued to merge. Returns true once all slices have passed.
  */
 function advanceSlices(state: RunState, config: Config, ctx: Ctx): boolean {
   for (const slice of state.slices) {
+    const id = slice.def.id;
+    if (slice.phase === 'review') {
+      if (resolveGates(state, config, DELIVERY_GATES, (g) => sliceGate(slice, g), ctx, id)) continue;
+      slice.phase = 'merge';
+      emit(state, ctx, { type: 'slice.merging', stage: 'implement', slice: id, note: slice.pr?.url });
+      continue;
+    }
     if (slice.phase !== 'exit') continue;
-    if (resolveGates(state, config, SLICE_GATES, (g) => slice.gates[g], ctx, slice.def.id)) continue;
+    if (resolveGates(state, config, SLICE_GATES, (g) => slice.gates[g], ctx, id)) continue;
+    if (state.delivery === 'slice') {
+      slice.phase = 'pr';
+      emit(state, ctx, { type: 'slice.pr_due', stage: 'implement', slice: id });
+      continue;
+    }
     if (slice.worktree) {
       slice.phase = 'merge';
       emit(state, ctx, { type: 'slice.merging', stage: 'implement', slice: slice.def.id });
@@ -131,20 +178,27 @@ function advanceSlices(state: RunState, config: Config, ctx: Ctx): boolean {
 export function advance(state: RunState, config: Config, ctx: Ctx): void {
   while (state.status === 'active') {
     const stage = state.stage;
-    const def = STAGE_DEFS[stage];
+    const def = stageDef(state, stage);
     const ss = state.stages[stage];
 
     switch (ss.phase) {
-      case 'pending':
-        if (!config.stages[stage].enabled) {
+      case 'pending': {
+        // With a PR per slice, each slice's PR was approved and merged on its own: there's no run PR.
+        const merged = state.delivery === 'slice' && stage === 'merge';
+        if (!config.stages[stage].enabled || merged) {
           ss.phase = 'skipped';
           for (const gate of [...def.entryGates, ...def.exitGates]) state.gates[gate].status = 'skipped';
-          emit(state, ctx, { type: 'stage.skipped', stage, note: 'disabled by config' });
+          emit(state, ctx, { type: 'stage.skipped', stage, note: merged ? 'each slice merged through its own PR' : 'disabled by config' });
         } else {
           ss.phase = 'entry';
           emit(state, ctx, { type: 'stage.started', stage });
+          if (state.delivery === 'slice' && stage === 'pr' && state.gates['pr.ready'].status === 'pending') {
+            state.gates['pr.ready'].status = 'skipped';
+            emit(state, ctx, { type: 'gate.skipped', gate: 'pr.ready', note: "checked on each slice's PR" });
+          }
         }
         break;
+      }
       case 'entry':
         if (resolveGates(state, config, def.entryGates, (g) => state.gates[g], ctx)) return;
         ss.phase = def.hasWork ? 'work' : 'exit';
@@ -181,14 +235,18 @@ export function currentGate(state: RunState, config: Config): RunGateName | unde
   return gatesInPhase(state).find((g) => !isResolved(state.gates[g], gateConfig(state, config, g)));
 }
 
-/** The slice gate awaiting a verdict for `slice`, if its work is done and a gate is unresolved. */
-export function currentSliceGate(state: RunState, config: Config, slice: SliceState): SliceGateName | undefined {
-  if (state.status !== 'active' || state.stage !== 'implement' || slice.phase !== 'exit') return undefined;
-  return SLICE_GATES.find((g) => !isResolved(slice.gates[g], gateConfig(state, config, g)));
+/**
+ * The gate awaiting a verdict for `slice`: one of its slice gates once its work is done, or with a
+ * PR per slice, one of the delivery gates once its PR is open.
+ */
+export function currentSliceGate(state: RunState, config: Config, slice: SliceState): PerSliceGate | undefined {
+  if (state.status !== 'active' || state.stage !== 'implement') return undefined;
+  const gates: readonly PerSliceGate[] | undefined = slice.phase === 'exit' ? SLICE_GATES : slice.phase === 'review' ? DELIVERY_GATES : undefined;
+  return gates?.find((g) => !isResolved(sliceGate(slice, g), gateConfig(state, config, g)));
 }
 
 function sliceInfo(slice: SliceState): SliceInfo {
-  return { ...slice.def, ...(slice.fixes ? { fixes: slice.fixes } : {}) };
+  return { ...slice.def, ...(slice.fixes ? { fixes: slice.fixes } : {}), ...(slice.pr ? { pr: slice.pr } : {}) };
 }
 
 function gateAction(gate: GateName, gs: GateState, gc: GateConfig, slice?: SliceInfo): Action {
@@ -216,8 +274,12 @@ function sliceAction(state: RunState, config: Config, slice: SliceState): Action
     const def = STAGE_DEFS.implement;
     return { type: 'work', stage: 'implement', instructions: def.instructions, skill: def.skill, agent: def.agent, slice: sliceInfo(slice) };
   }
+  if (slice.phase === 'pr') {
+    const instructions = `Push this slice's branch and open (or update) its pull request into ${state.base}.`;
+    return { type: 'work', stage: 'pr', instructions, skill: STAGE_DEFS.pr.skill, slice: sliceInfo(slice) };
+  }
   const gate = currentSliceGate(state, config, slice);
-  return gate ? gateAction(gate, slice.gates[gate], gateConfig(state, config, gate), sliceInfo(slice)) : undefined;
+  return gate ? gateAction(gate, sliceGate(slice, gate), gateConfig(state, config, gate), sliceInfo(slice)) : undefined;
 }
 
 /**
@@ -241,11 +303,11 @@ export function nextActions(state: RunState, config: Config): Action[] {
       const merging = state.slices.filter((s) => s.phase === 'merge').map((s) => s.def.id);
       if (merging.length > 0) {
         // Merges are settled after every mutation; this is only reached when one couldn't run.
-        throw new GenieError(`slice ${merging.join(', ')} is waiting to merge onto ${state.branch}; see the error above`);
+        throw new GenieError(`slice ${merging.join(', ')} is waiting to merge onto ${landsOn(state)}; see the error above`);
       }
       throw new Error(`run ${state.id}: no slice is actionable; call advance() first`);
     }
-    const def = STAGE_DEFS[stage];
+    const def = stageDef(state, stage);
     return [{ type: 'work', stage, instructions: def.instructions, artifact: def.artifact, skill: def.skill, agent: def.agent }];
   }
 
@@ -270,6 +332,10 @@ export function completeWork(
   opts: WorkOptions = {},
 ): void {
   requireActive(state);
+  if (stage === 'pr' && state.delivery === 'slice' && state.stage === 'implement') {
+    completeSlicePr(state, config, by, opts.slice, opts.pr, ctx);
+    return;
+  }
   if (state.stage !== stage || state.stages[stage].phase !== 'work') {
     throw new GenieError(`stage ${stage} is not in progress (run is at ${state.stage}/${state.stages[state.stage].phase})`);
   }
@@ -317,6 +383,29 @@ function completeSlice(state: RunState, config: Config, by: string, sliceId: str
   advance(state, config, ctx);
 }
 
+/** With a PR per slice: the slice's PR is open, so its delivery gates can run. */
+function completeSlicePr(
+  state: RunState,
+  config: Config,
+  by: string,
+  sliceId: string | undefined,
+  pr: WorkOptions['pr'],
+  ctx: Ctx,
+): void {
+  const waiting = state.slices.filter((s) => s.phase === 'pr').map((s) => s.def.id);
+  const id = sliceId ?? (waiting.length === 1 ? waiting[0] : undefined);
+  if (!id) throw new GenieError(`pass --slice <id> to say whose PR is open (waiting for a PR: ${waiting.join(', ') || 'none'})`);
+  const slice = findSlice(state, id);
+  if (!slice) throw new GenieError(`unknown slice ${id} (slices: ${state.slices.map((s) => s.def.id).join(', ')})`);
+  if (slice.phase !== 'pr') throw new GenieError(`slice ${id} isn't waiting for its pull request (it is ${slice.phase})`);
+  if (!pr) throw new GenieError(`slice ${id} needs its pull request opened first`);
+  slice.pr = pr;
+  slice.phase = 'review';
+  emit(state, ctx, { type: 'slice.pr', stage: 'implement', slice: id, by, note: pr.url });
+  touch(state, ctx);
+  advance(state, config, ctx);
+}
+
 const SOURCE_FOR_KIND: Record<GateKind, VerdictSource[]> = {
   automated: ['automated'],
   agent: ['agent'],
@@ -325,7 +414,7 @@ const SOURCE_FOR_KIND: Record<GateKind, VerdictSource[]> = {
 };
 
 /** The slice a slice-gate verdict is for: as given, or the only slice awaiting that gate. */
-export function resolveVerdictSlice(state: RunState, config: Config, gate: SliceGateName, sliceId?: string): SliceState {
+export function resolveVerdictSlice(state: RunState, config: Config, gate: PerSliceGate, sliceId?: string): SliceState {
   if (sliceId) {
     const slice = findSlice(state, sliceId);
     if (!slice) throw new GenieError(`unknown slice ${sliceId} (slices: ${state.slices.map((s) => s.def.id).join(', ') || 'none'})`);
@@ -397,9 +486,9 @@ export function recordVerdict(state: RunState, config: Config, input: VerdictInp
 
   let gs: GateState;
   let slice: SliceState | undefined;
-  if (isSliceGate(gate)) {
+  if (isPerSliceGate(state, gate)) {
     slice = resolveVerdictSlice(state, config, gate, input.slice);
-    gs = slice.gates[gate];
+    gs = sliceGate(slice, gate);
   } else {
     const current = currentGate(state, config);
     if (current !== gate) {
@@ -465,11 +554,12 @@ function reworkSlice(state: RunState, slice: SliceState, gate: GateName, ctx: Ct
   touch(state, ctx);
 }
 
+/** Back to work, every gate pending again: with a PR per slice, its PR is checked and approved again too. */
 function resetSlice(slice: SliceState): void {
   slice.phase = 'work';
-  for (const g of SLICE_GATES) {
-    slice.gates[g].status = 'pending';
-    delete slice.gates[g].agentReview;
+  for (const gs of Object.values(slice.gates)) {
+    gs.status = 'pending';
+    delete gs.agentReview;
   }
 }
 
@@ -481,7 +571,7 @@ function mergingSlice(state: RunState, id: string): SliceState {
   return slice;
 }
 
-/** Records that a slice's branch landed on the run branch, passing the slice. */
+/** Records that a slice's branch landed on the run branch (or its PR merged into the base), passing the slice. */
 export function sliceMerged(state: RunState, config: Config, id: string, commit: string, ctx: Ctx): void {
   const slice = mergingSlice(state, id);
   slice.phase = 'passed';
@@ -493,7 +583,7 @@ export function sliceMerged(state: RunState, config: Config, id: string, commit:
 }
 
 /**
- * A slice's branch conflicts with the run branch (another slice landed first). It goes back to
+ * A slice's branch conflicts with where it lands (another slice landed first). It goes back to
  * work to resolve the conflict, and its gates run again on the result.
  */
 export function sliceConflict(state: RunState, id: string, files: string[], ctx: Ctx): void {
@@ -503,7 +593,7 @@ export function sliceConflict(state: RunState, id: string, files: string[], ctx:
     type: 'slice.rework',
     stage: 'implement',
     slice: id,
-    note: `merge conflict onto ${state.branch} in ${files.join(', ')}`,
+    note: `merge conflict onto ${landsOn(state)}${files.length > 0 ? ` in ${files.join(', ')}` : ''}`,
     conflict: files,
   });
   touch(state, ctx);
@@ -523,14 +613,24 @@ function addFixupSlice(state: RunState, gate: RunGateName, ctx: Ctx): void {
       depends_on: [],
     },
     gate,
+    state.delivery,
   );
   state.slices.push(slice);
   emit(state, ctx, { type: 'slice.rework', stage: 'implement', slice: id, gate, note: 'fix-up slice added' });
 }
 
+/**
+ * Where a failed run-level gate sends the run. With a PR per slice, what the final intent review
+ * finds has already merged, so a fix-up slice fixes it, through a PR of its own.
+ */
+function reworkTarget(state: RunState, gate: RunGateName): StageName | 'halt' {
+  if (state.delivery === 'slice' && gate === 'intent.reviewed') return 'implement';
+  return GATE_DEFS[gate].onFail;
+}
+
 /** Routes a failed run-level gate back to the stage that should redo the work. */
 function rework(state: RunState, gate: RunGateName, ctx: Ctx): void {
-  const target = GATE_DEFS[gate].onFail;
+  const target = reworkTarget(state, gate);
   if (target === 'halt') {
     halt(state, `${gate} failed`, ctx);
     return;

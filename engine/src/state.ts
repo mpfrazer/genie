@@ -1,12 +1,24 @@
 import { GenieError } from './errors.ts';
-import { GATES, RUN_GATES, SLICE_GATES, STAGES, type RunGateName, type SliceGateName, type StageName } from './pipeline.ts';
+import {
+  DELIVERY_GATES,
+  GATES,
+  RUN_GATES,
+  SLICE_GATES,
+  STAGES,
+  type DeliveryGateName,
+  type RunGateName,
+  type SliceGateName,
+  type StageName,
+} from './pipeline.ts';
 import type { Config, Mode } from './config/types.ts';
 import type { PlanSlice } from './plan.ts';
 
 export const STATE_VERSION = 2;
 
 export type StagePhase = 'pending' | 'entry' | 'work' | 'exit' | 'passed' | 'skipped';
-export type SlicePhase = 'work' | 'exit' | 'merge' | 'passed';
+export type SlicePhase = 'work' | 'exit' | 'pr' | 'review' | 'merge' | 'passed';
+/** How a run's work reaches the base branch: one PR for the run, or one per slice (`forge.pr_per`). */
+export type Delivery = 'run' | 'slice';
 export type GateStatus = 'pending' | 'pass' | 'fail' | 'needs_human' | 'skipped';
 export type Verdict = 'pass' | 'fail' | 'needs_human';
 export type RunStatus = 'active' | 'halted' | 'done' | 'aborted';
@@ -32,7 +44,9 @@ export interface SliceState {
   def: PlanSlice;
   /**
    * `work` until its work is done, `exit` while its gates run, then `passed`. A slice with its own
-   * worktree goes through `merge` first, until its branch lands on the run branch.
+   * worktree goes through `merge` first, until its branch lands on the run branch. With a PR per
+   * slice it goes `exit` → `pr` (its PR is opened) → `review` (the DELIVERY_GATES) → `merge` (the
+   * engine merges the PR into the base branch) → `passed`.
    */
   phase: SlicePhase;
   /** Who did the slice's work; they may not evaluate its gates. */
@@ -43,9 +57,12 @@ export interface SliceState {
   fixes?: RunGateName;
   /** Orchestrated mode: the slice's own worktree and branch, while they exist. */
   worktree?: { path: string; branch: string };
-  /** The merge commit that landed the slice on the run branch (orchestrated mode). */
+  /** The merge commit that landed the slice on the run branch, or its PR on the base branch. */
   merged?: string;
-  gates: Record<SliceGateName, GateState>;
+  /** With a PR per slice: the slice's pull request, once opened. */
+  pr?: { number: number; url: string };
+  /** The SLICE_GATES, plus the DELIVERY_GATES when the run opens a PR per slice. */
+  gates: Record<SliceGateName, GateState> & Partial<Record<DeliveryGateName, GateState>>;
 }
 
 export interface RunState {
@@ -59,6 +76,13 @@ export interface RunState {
   /** Branch the run's work is committed on, and the branch it lands in. */
   branch: string;
   base: string;
+  /**
+   * `slice` once an orchestrated run starts its first slice with `forge.pr_per: slice`: each slice
+   * then branches from the base, gets its own PR, and merges on its own. Otherwise (absent) `run`.
+   */
+  delivery?: Delivery;
+  /** With a PR per slice: the base branch's commit when the first slice started, where the run's changes begin. */
+  since?: string;
   createdAt: string;
   updatedAt: string;
   stages: Record<StageName, StageState>;
@@ -105,13 +129,21 @@ export function freshGate(): GateState {
   return { status: 'pending', attempts: 0, failures: 0 };
 }
 
-export function newSliceState(def: PlanSlice, fixes?: RunGateName): SliceState {
+export function newSliceState(def: PlanSlice, fixes?: RunGateName, delivery?: Delivery): SliceState {
+  const gates = delivery === 'slice' ? [...SLICE_GATES, ...DELIVERY_GATES] : SLICE_GATES;
   return {
     def,
     phase: 'work',
     ...(fixes ? { fixes } : {}),
-    gates: Object.fromEntries(SLICE_GATES.map((g) => [g, freshGate()])) as Record<SliceGateName, GateState>,
+    gates: Object.fromEntries(gates.map((g) => [g, freshGate()])) as SliceState['gates'],
   };
+}
+
+/** A slice's state for one of its gates. Delivery gates exist only on runs that open a PR per slice. */
+export function sliceGate(slice: SliceState, gate: SliceGateName | DeliveryGateName): GateState {
+  const gs = slice.gates[gate];
+  if (!gs) throw new Error(`slice ${slice.def.id} has no ${gate} gate`);
+  return gs;
 }
 
 export function newRunState({ id, title, mode, branch, base }: NewRun, now: string): RunState {

@@ -1,8 +1,8 @@
 import { gateConfig, type Action } from './engine.ts';
-import { SLICE_GATES, STAGE_DEFS, STAGES } from './pipeline.ts';
+import { DELIVERY_GATES, SLICE_GATES, STAGE_DEFS, STAGES } from './pipeline.ts';
 import type { Config } from './config/types.ts';
 import { describeBudget } from './budget.ts';
-import { findSlice, type RunState, type SlicePhase, type StagePhase } from './state.ts';
+import { findSlice, type GateState, type RunState, type SlicePhase, type StagePhase } from './state.ts';
 import type { CheckResult } from './checks.ts';
 
 const PHASE_MARK: Record<StagePhase, string> = {
@@ -21,7 +21,7 @@ export function describeAction(action: Action): string {
   const flag = slice ? ` --slice ${slice.id}` : '';
   switch (action.type) {
     case 'work': {
-      const what = slice ? slice.goal : action.instructions;
+      const what = slice && action.stage === 'implement' ? slice.goal : action.instructions;
       return `Work on ${action.stage}${of}${action.agent ? ` (${action.agent} subagent)` : ''}: ${what}${action.artifact ? ` (write ${action.artifact})` : ''}\n  then: genie done ${action.stage}${flag}${action.agent ? ` --by ${action.agent}` : ''}`;
     }
     case 'evaluate':
@@ -32,7 +32,8 @@ export function describeAction(action: Action): string {
       const review = action.agentReview
         ? `\n  agent pre-review by ${action.agentReview.by}: ${action.agentReview.verdict}${action.agentReview.note ? ` (${action.agentReview.note})` : ''}`
         : '';
-      return `Waiting for a human decision on ${action.gate}${of}: ${action.reason}${review}\n  human: /genie:approve ${action.gate}${flag}  (or --reject)`;
+      const pr = slice?.pr ? `\n  PR: ${slice.pr.url}` : '';
+      return `Waiting for a human decision on ${action.gate}${of}: ${action.reason}${pr}${review}\n  human: /genie:approve ${action.gate}${flag}  (or --reject)`;
     }
     case 'halted':
       return `Run halted: ${action.reason}`;
@@ -66,20 +67,25 @@ export function describeRun(state: RunState, config: Config, action: Action, dir
   return lines.join('\n');
 }
 
-const SLICE_MARK: Record<SlicePhase, string> = { work: '▶', exit: '▶', merge: '▶', passed: '✓' };
+const SLICE_MARK: Record<SlicePhase, string> = { work: '▶', exit: '▶', pr: '▶', review: '▶', merge: '▶', passed: '✓' };
 
-/** One line per slice under the implement stage: progress and its gates. */
+/**
+ * One line per slice under the implement stage: progress and its gates. With a PR per slice, the
+ * delivery gates follow on the same line, and the PR on the next.
+ */
 function describeSlices(state: RunState, config: Config): string[] {
-  return state.slices.map((slice) => {
+  return state.slices.flatMap((slice) => {
     const deps = slice.def.depends_on.filter((d) => findSlice(state, d)?.phase !== 'passed');
     const phase = slice.phase === 'passed' ? '' : deps.length > 0 ? `waits:${deps.join(',')}` : slice.phase;
-    const gates = SLICE_GATES.map((g) => {
-      const gs = slice.gates[g];
+    const gates = [...SLICE_GATES, ...DELIVERY_GATES].flatMap((g) => {
+      const gs: GateState | undefined = slice.gates[g];
+      if (!gs) return [];
       const mark = !gateConfig(state, config, g).enabled && gs.status === 'pending' ? 'off' : gs.status;
-      return `${g}:${mark}${gs.failures ? `(${gs.failures}✗)` : ''}`;
+      return [`${g}:${mark}${gs.failures ? `(${gs.failures}✗)` : ''}`];
     }).join('  ');
     const mark = deps.length > 0 ? '·' : SLICE_MARK[slice.phase];
-    return `      ${mark} ${slice.def.id.padEnd(4)} ${phase.padEnd(10)} ${gates}  ${slice.def.title}`;
+    const line = `      ${mark} ${slice.def.id.padEnd(4)} ${phase.padEnd(10)} ${gates}  ${slice.def.title}`;
+    return slice.pr ? [line, `             PR ${slice.pr.url}${slice.phase === 'passed' ? ' (merged)' : ''}`] : [line];
   });
 }
 

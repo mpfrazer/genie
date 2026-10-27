@@ -64,6 +64,15 @@ export function reached(run: RunState, stage: StageName): boolean {
   return ['work', 'exit', 'passed'].includes(run.stages[stage].phase);
 }
 
+/**
+ * With a PR per slice, while the run implements: the branches of slices whose PR is being opened.
+ * Those may be pushed, and PRs opened, before the run reaches the pr stage.
+ */
+function slicesOpeningPrs(run: RunState): string[] {
+  if (run.delivery !== 'slice' || run.stage !== 'implement' || run.status !== 'active') return [];
+  return run.slices.flatMap((s) => (s.phase === 'pr' && s.worktree ? [s.worktree.branch] : []));
+}
+
 function touchesBase(refs: PushRefs, base: string, currentBranch: PolicyInput['currentBranch']): boolean {
   if (refs.everything || refs.branches.includes(base)) return true;
   return refs.current && currentBranch(refs.cwd) === base;
@@ -146,6 +155,17 @@ function decideOutward(
     return { decision: 'deny', reason: `genie: ${LABEL[action.kind]} is disabled for this repo (stages.${stage}.enabled: false).` };
   }
   if (reached(run, stage)) return undefined;
+  const opening = slicesOpeningPrs(run);
+  if (opening.length > 0 && action.kind === 'pr_create') return undefined;
+  if (opening.length > 0 && action.kind === 'push') {
+    const { refs } = action;
+    const pushed = [...refs.branches, ...(refs.current ? [input.currentBranch(refs.cwd) ?? 'HEAD'] : [])];
+    if (!refs.everything && !refs.tags && pushed.length > 0 && pushed.every((b) => opening.includes(b))) return undefined;
+    return {
+      decision: 'deny',
+      reason: `genie: while run ${run.id} implements, only the branches of slices whose PR is being opened may be pushed (${opening.join(', ')}).`,
+    };
+  }
   const next = describeAction(nextAction(run, config)).replace(/\n\s*/g, ' ');
   return {
     decision: 'deny',

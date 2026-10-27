@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { deepMerge, loadConfig } from './load.ts';
+import { defaultConfig } from './defaults.ts';
+import type { Config } from './types.ts';
+import { configDiff } from '../session.ts';
 
 function repo(repoYaml?: string, userYaml?: string): { root: string; userDir: string } {
   const root = mkdtempSync(join(tmpdir(), 'genie-config-'));
@@ -61,10 +64,27 @@ describe('loadConfig', () => {
     const { config } = loadConfig(repo('deploy:\n  command: ./deploy.sh {env}\n'));
     assert.equal(config.stages.deploy.enabled, true);
   });
+
+  it('allows a PR per slice only when PRs are opened and merged, on GitHub', () => {
+    const slice = `${NO_DEPLOY}forge:\n  pr_per: slice\n`;
+    assert.equal(loadConfig(repo(slice)).config.forge.pr_per, 'slice');
+    assert.throws(() => loadConfig(repo(`${slice}  provider: gitlab\n`)), /needs forge\.provider: github \(it is gitlab\)/);
+    assert.throws(() => loadConfig(repo(`${NO_DEPLOY}  merge:\n    enabled: false\nforge:\n  pr_per: slice\n`)), /stages\.merge is disabled/);
+  });
 });
 
 describe('deepMerge', () => {
   it('replaces arrays instead of concatenating them', () => {
     assert.deepEqual(deepMerge({ a: [1, 2], b: { c: 1 } }, { a: [3], b: { d: 2 } }), { a: [3], b: { c: 1, d: 2 } });
+  });
+});
+
+describe('configDiff', () => {
+  it("doesn't report settings a run's older snapshot predates, unless they differ from the default", () => {
+    const current = defaultConfig();
+    const older = structuredClone(current) as unknown as { forge: Record<string, unknown> };
+    delete older.forge.pr_per;
+    assert.deepEqual(configDiff(older as unknown as Config, current), []);
+    assert.deepEqual(configDiff(older as unknown as Config, { ...current, forge: { ...current.forge, pr_per: 'slice' } }), ['forge.pr_per']);
   });
 });

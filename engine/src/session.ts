@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { GenieError } from './errors.ts';
 import { advance, type Ctx } from './engine.ts';
 import { chargeTime, checkBudget } from './budget.ts';
-import { loadConfig, repoConfigPath } from './config/load.ts';
+import { deepMerge, loadConfig, repoConfigPath } from './config/load.ts';
+import { defaultConfig } from './config/defaults.ts';
 import type { Config, ConfigLayer } from './config/types.ts';
 import type { RunState } from './state.ts';
 import { withLock } from './lock.ts';
@@ -48,7 +49,10 @@ function liveSnapshot(root: string, runId: string | undefined): Config | undefin
   }
 }
 
-/** Dotted paths whose values differ between two configs, e.g. `gates.pr.approved.enabled`. */
+/**
+ * Dotted paths whose values differ between two configs, e.g. `gates.pr.approved.enabled`. A setting
+ * added by a newer genie counts as its default in a snapshot taken before it existed.
+ */
 export function configDiff(a: Config, b: Config): string[] {
   const out: string[] = [];
   const walk = (x: unknown, y: unknown, path: string) => {
@@ -59,7 +63,8 @@ export function configDiff(a: Config, b: Config): string[] {
       out.push(path);
     }
   };
-  walk(a, b, '');
+  const withDefaults = (c: Config) => deepMerge(defaultConfig() as unknown as Record<string, unknown>, c as unknown as Record<string, unknown>);
+  walk(withDefaults(a), withDefaults(b), '');
   return out;
 }
 

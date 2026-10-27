@@ -21,7 +21,7 @@ export function defaultConfig(): Config {
     profile: 'service',
     mode: { default: 'guided', max_parallel_slices: 4 },
     commands: {},
-    forge: { provider: 'github', base_branch: 'main', branch_prefix: 'genie/' },
+    forge: { provider: 'github', base_branch: 'main', branch_prefix: 'genie/', pr_per: 'run' },
     stages: {
       spec: { enabled: true },
       decompose: { enabled: true },

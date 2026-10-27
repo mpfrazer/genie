@@ -33,6 +33,17 @@ export type GateName = (typeof GATES)[number];
 /** Gates evaluated once per slice of the plan, inside the implement stage. */
 export const SLICE_GATES = ['slice.verified', 'slice.reviewed'] as const;
 export type SliceGateName = (typeof SLICE_GATES)[number];
+/**
+ * With a PR per slice (`forge.pr_per: slice`), these gates are also evaluated once per slice, on
+ * that slice's own pull request, while the run is in the implement stage.
+ */
+export const DELIVERY_GATES = ['pr.ready', 'intent.reviewed', 'pr.approved'] as const;
+export type DeliveryGateName = (typeof DELIVERY_GATES)[number];
+
+export function isDeliveryGate(gate: GateName): gate is DeliveryGateName {
+  return (DELIVERY_GATES as readonly string[]).includes(gate);
+}
+
 /** Gates evaluated once per run. */
 export type RunGateName = Exclude<GateName, SliceGateName>;
 export const RUN_GATES = GATES.filter((g): g is RunGateName => !(SLICE_GATES as readonly string[]).includes(g));
