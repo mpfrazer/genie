@@ -83,6 +83,8 @@ describe('invariants (always on)', () => {
 
   it('denies writes to engine-owned run state, but not stage artifacts', () => {
     assert.equal(check('echo {} > .genie/runs/r1/state.json')?.decision, 'deny');
+    assert.equal(check('echo {} &>.genie/runs/r1/state.json')?.decision, 'deny');
+    assert.equal(check('echo {} 2>&1 >.genie/runs/CURRENT')?.decision, 'deny');
     assert.equal(check('sed -i s/pending/pass/ .genie/runs/r1/state.json')?.decision, 'deny');
     assert.equal(check('rm -rf .genie/runs/r1')?.decision, 'deny');
     assert.equal(check('mv /tmp/x .genie/runs/CURRENT')?.decision, 'deny');

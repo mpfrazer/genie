@@ -50,6 +50,12 @@ function classifyPush(rest: Argv, cwd: string | undefined): PushRefs {
   let tagsOnly = false;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
+    // Redirections (`2>&1`, `> log`, `&>log`) aren't arguments; a bare operator takes the next word as its target.
+    const redirect = /^(\d*|&)(>>?|<)(&?\d*|.*)$/.exec(a);
+    if (redirect) {
+      if (redirect[3] === '') i++;
+      continue;
+    }
     if (a === '--all' || a === '--mirror' || a === '--branches') refs.everything = true;
     else if (a === '--tags') refs.tags = tagsOnly = true;
     else if (a === '--follow-tags') refs.tags = true;
@@ -141,7 +147,7 @@ function writesTo(argv: Argv, matches: (p: string) => boolean, dirs: string[]): 
   const hit = (p: string) => matches(p) || (!p.startsWith('/') && dirs.some((d) => matches(posix.join(d, p))));
   for (let i = 0; i < argv.length; i++) {
     const w = argv[i]!;
-    const redirect = /^\d*>>?$/.test(w) ? argv[i + 1] : /^\d*>>?(.+)$/.exec(w)?.[1];
+    const redirect = /^(\d*|&)>>?$/.test(w) ? argv[i + 1] : /^(?:\d*|&)>>?([^&].*)$/.exec(w)?.[1];
     if (redirect && hit(redirect)) return redirect;
   }
   if (READ_ONLY.has(basename(argv[0] ?? ''))) return undefined;

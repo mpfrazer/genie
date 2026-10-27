@@ -78,6 +78,10 @@ function split(line: string): Argv[] {
       i = close;
     } else if (c === ' ' || c === '\t') {
       endWord();
+    } else if (c === '&' && (word.endsWith('>') || word.endsWith('<') || line[i + 1] === '>')) {
+      // `2>&1`, `>&2`, `&>file`: part of a redirection, not a control operator.
+      word += c;
+      inWord = true;
     } else {
       const op = OPERATORS.find((o) => line.startsWith(o, i));
       if (op) {

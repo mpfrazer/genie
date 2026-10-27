@@ -41,6 +41,11 @@ describe('simpleCommands', () => {
     ]);
   });
 
+  it('keeps redirections that use & in their words', () => {
+    assert.deepEqual(simpleCommands('git push origin b 2>&1; echo done'), [['git', 'push', 'origin', 'b', '2>&1'], ['echo', 'done']]);
+    assert.deepEqual(simpleCommands('make &>log && make >&2 & wait'), [['make', '&>log'], ['make', '>&2'], ['wait']]);
+  });
+
   it('ignores comments', () => {
     assert.deepEqual(simpleCommands('ls # git push\necho ok'), [['ls'], ['echo', 'ok']]);
   });

@@ -189,6 +189,7 @@ describe('a PR per slice (forge.pr_per: slice)', () => {
     // While their PRs are being opened, only those slices' branches may be pushed.
     assert.equal(hook(root, `git -C ${w1.path} push -u origin ${w1.branch}`), 'allow');
     assert.equal(hook(root, 'git push -u origin HEAD', w2.path), 'allow');
+    assert.equal(hook(root, `cd ${w1.path} && git status --short && git push -u origin ${w1.branch} 2>&1; echo pushed`), 'allow', 'seen in a live run');
     assert.equal(hook(root, `git push origin ${w1.branch} ${view.run.branch}`), 'deny');
     assert.equal(hook(root, 'git push origin main'), 'deny');
     assert.equal(hook(root, 'gh pr create --fill'), 'allow');
