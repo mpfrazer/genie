@@ -2,10 +2,10 @@ import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { GenieError } from '../errors.ts';
 import { runChecks, type CheckResult } from '../checks.ts';
-import { advance, currentGate, gateConfig, nextAction, recordVerdict, resolveVerdictSlice } from '../engine.ts';
-import { GATES, isSliceGate, type GateName } from '../pipeline.ts';
+import { advance, currentGate, gateConfig, isPerSliceGate, nextAction, recordVerdict, resolveVerdictSlice } from '../engine.ts';
+import { GATES, type GateName } from '../pipeline.ts';
 import type { Config } from '../config/types.ts';
-import { findSlice, type GateState, type RunState, type Verdict } from '../state.ts';
+import { findSlice, sliceGate, type GateState, type RunState, type Verdict } from '../state.ts';
 import { currentRunId, loadRun, logTail, runDir } from '../store.ts';
 import { redeemGrant } from '../grants.ts';
 import { TamperError } from '../seal.ts';
@@ -26,13 +26,14 @@ function evidenceDir(session: Session, runId: string): string {
 }
 
 /**
- * The gate state a verdict will land on, failing fast if the gate isn't up: for slice gates, the
- * named slice's (or the only slice awaiting it); otherwise the run's current gate.
+ * The gate state a verdict will land on, failing fast if the gate isn't up: for slice gates (and
+ * with a PR per slice, the delivery gates while implementing), the named slice's (or the only
+ * slice awaiting it); otherwise the run's current gate.
  */
 function target(state: RunState, config: Config, gate: GateName, slice?: string): { gs: GateState; slice?: string } {
-  if (isSliceGate(gate)) {
+  if (isPerSliceGate(state, gate)) {
     const s = resolveVerdictSlice(state, config, gate, slice);
-    return { gs: s.gates[gate], slice: s.def.id };
+    return { gs: sliceGate(s, gate), slice: s.def.id };
   }
   if (slice) throw new GenieError(`gate ${gate} is a run-level gate; --slice only applies to slice gates`);
   const ahead = currentGate(state, config);

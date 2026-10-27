@@ -152,6 +152,13 @@
         "ci_command": {
           "type": "string",
           "description": "Waits for the run branch's CI and exits non-zero if it fails; evaluated by the pr.ready gate (e.g. gh pr checks --watch)."
+        },
+        "pr_per": {
+          "enum": [
+            "run",
+            "slice"
+          ],
+          "description": "run: the slices land on the run branch, which becomes one PR. slice: in orchestrated mode, each slice gets its own PR into the base branch, checked, approved, and merged on its own (GitHub only)."
         }
       }
     },

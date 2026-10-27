@@ -183,8 +183,8 @@ Not yet verified: whether PreToolUse fires for user-typed `! cmd` bash-mode comm
 | State write | writes/redirects to `.genie/runs/{CURRENT,<id>,<id>/state.json,log.jsonl,evidence,grants}` | Always denied. Stage artifacts (`spec.md`, `plan.yaml`) stay writable. Readers and `cd` into a run dir are allowed; relative paths are resolved against the session cwd and every directory the command `cd`s into, so `cd <run dir> && echo x > state.json` is still caught. |
 | Config write | writes to `.genie/config.yaml` | **Ask**: the user confirms, because it changes which gates apply. |
 | Push to base | `git push` that updates `forge.base_branch` (explicitly, implicitly from it, `--all`/`--mirror`, delete) | Denied when `enforcement.protect_base_branch` (default on). |
-| Push / open PR | `git push`, `gh pr create`, `glab mr create` | Allowed once the run reaches `pr`. |
-| Merge | `gh pr merge`, `glab mr merge` | Allowed once `merge`'s entry gate (`pr.approved`) passes. |
+| Push / open PR | `git push`, `gh pr create`, `glab mr create` | Allowed once the run reaches `pr`. With a PR per slice (§7), also while implementing, for the branches of slices whose PR is being opened, and only those. |
+| Merge | `gh pr merge`, `glab mr merge` | Allowed once `merge`'s entry gate (`pr.approved`) passes. With a PR per slice, the engine merges each slice's PR itself after its `pr.approved`, so the model never needs to. |
 | Deploy | commands starting with `deploy.command` | Allowed once `deploy.approved` passes. |
 | Release | `git tag <name>`, pushing tags, `gh release create/edit/upload/delete`, `npm`/`pnpm`/`yarn`/`bun`/`cargo publish`, `gem push`, `twine upload`, `release.publish` | Allowed once `release.approved` passes. |
 
@@ -237,6 +237,7 @@ forge:
   base_branch: main
   branch_prefix: genie/
   pr_draft_until: intent.reviewed
+  pr_per: run                 # run: the slices become one PR | slice: each slice gets its own (orchestrated mode, GitHub; §7)
 
 stages:                       # turn whole steps on/off
   release:
@@ -388,6 +389,26 @@ How a slice moves through it:
 - **Merging.** A slice with a worktree goes to a `merge` phase, not `passed`, once its gates resolve. After every state change, the engine lands queued slices (plan order, under the run lock). A clean merge records `slice.merged`, removes the slice's worktree and branch, and passes the slice. A conflict sends the slice back to work with `feedback.conflict` listing the files, and its gates are reset; its implementer merges the run branch into the slice branch and resolves it. A merge that can't run at all (for example, uncommitted changes where the run branch is checked out) leaves the slice queued and reports the error on every command until it's cleared.
 - **Cleanup.** Once implement passes, the remaining worktrees (including the integration worktree) are pruned, so later stages run in the main checkout as in guided mode. On abort, pruning is attempted without force: unmerged or uncommitted work is kept, and the abort output says where.
 
+### A PR per slice
+By default a run's slices land on the run branch, which becomes one PR. With `forge.pr_per: slice`, an orchestrated run instead gives each slice its own PR into the base branch, checked, approved, and merged on its own, so no single PR at the end holds the whole run.
+
+The run decides when its first slice is dispatched in orchestrated mode, and records it as `delivery: slice`, with `since`, the base branch's commit at that moment. If guided mode already started slices on the run branch, the run keeps one PR (`delivery: run`) and logs why. It needs `forge.provider: github` and the GitHub remote as `origin`.
+
+A slice then goes:
+
+| Phase | What happens | Who |
+|---|---|---|
+| `work` | Implemented in its worktree, branched from `origin/<base>`. A slice that depends on others starts only once their PRs have merged, so it starts with their work. | `implementer` |
+| `exit` | `slice.verified`, `slice.reviewed`, as usual. | checks, `adversarial-reviewer` |
+| `pr` | Its branch is pushed and its PR opened into the base (`gh pr create`). `genie done pr --slice <id>` checks that origin has the branch as it stands locally and that the PR is open against the base, and records the PR. | main session, `genie:pr` skill |
+| `review` | The **delivery gates**, configured under `gates:` like any other but evaluated per slice: `pr.ready` (CI, in the slice's worktree), `intent.reviewed` (this slice against the intent), `pr.approved` (the user). | checks, `intent-reviewer`, human |
+| `merge` | The engine merges the PR (squash if the repo allows it, else a merge commit, else rebase), deletes the remote branch, fetches the base, and removes the worktree. | engine |
+
+- **Conflicts.** When another slice merged first and the PR now conflicts with the base, the slice goes back to work with `feedback.conflict` (the files, from `git merge-tree`). Its implementer merges `origin/<base>` into the slice branch, and every gate runs again, `pr.approved` included: the user approves the resolved diff. Anything else that stops the merge (required checks, a merge queue, a closed PR) leaves the slice queued and reports the forge's error until it's cleared.
+- **Rework.** A failed delivery gate sends only that slice back to work, like a slice gate. Its PR stays open; the next push updates it.
+- **After implement.** There's no run PR. `integrate` brings the main checkout up to date with the base, and `integration.verified` runs the full suite there. The `pr` stage has no work: `pr.ready` is skipped (each slice's PR had its own), and `intent.reviewed` reviews everything that merged since `since` against the intent. The `merge` stage is skipped. Both skips are logged. A failed `integration.verified` or final `intent.reviewed` can't unmerge anything, so either adds a fix-up slice, which gets its own PR. Then `build`, `deploy`, and `release` run once, as usual.
+- **Modes.** Switching such a run to guided mode is refused until every slice has merged.
+
 ## 8. Modes in detail
 
 ### Guided
@@ -426,6 +447,8 @@ Verified end to end on 2026-10-22:
 
 It stops when only human gates remain (and says what to review), when the run halts, aborts or finishes, or on an error it can't resolve. It doesn't stop when a stage passes or a gate fails: rework is part of the loop. `/genie:next` still works on an orchestrated run, one action at a time, and `genie mode guided` switches back so new slices are worked on the run branch.
 
+**A PR per slice.** With `forge.pr_per: slice`, each slice gets its own PR into the base, and the loop opens it once the slice passes its gates (§7). The run doesn't wait for every slice: while one slice's PR waits for the user's `pr.approved`, the others carry on, and the loop stops only when nothing but human decisions is left. Each approval merges that slice's PR, which starts the slices that depend on it.
+
 **The plan.** `plan.approved` goes to the `plan-reviewer` agent (§5, per-mode gate settings). It checks what the engine's plan validation can't: that slices deliver what they claim to cover, that slices with no dependency between them won't change the same code (they'd conflict when they merge), that the dependencies are real, and that the sizing and tests are reasonable. A fail sends the run back to decompose with its findings. After two failed retries, or a `needs_human` verdict, the plan goes to the user.
 
 **Budgets.** `budgets:` limits what an orchestrated run does without the user:
@@ -446,6 +469,6 @@ Cost is only as good as its source. Claude Code reports a session's cost only to
 3. **Issue tracker integration**: should intake pull from Linear/Jira/GitHub Issues, or start from a prompt only?
 4. **Where human approvals happen**: only in Claude Code, or also via PR review state on GitHub (G8 = "PR approved on GitHub")?
 5. **Intent review input**: the original intent only, or intent + spec + linked issue?
-6. **Slice merge strategy**: integration branch → single PR (proposed), or one PR per slice (stacked PRs)?
+6. ~~**Slice merge strategy**~~: **Decided: both, per repo** (`forge.pr_per`). The default lands slices on the run branch, one PR. `slice` gives each slice its own PR into the base, merged one at a time; a dependent slice waits for its dependencies to merge rather than stacking on their branches (§7).
 7. **Run artifacts in git**: gitignore `runs/` (proposed) or commit specs/plans as permanent design records?
 8. **Notifications** for pending human gates in orchestrated mode: terminal only, or push/Slack?

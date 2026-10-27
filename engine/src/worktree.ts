@@ -127,9 +127,10 @@ function findEntry(root: string, path: string): WorktreeEntry | undefined {
 
 /**
  * Creates (or returns) the worktree for a slice, on its slice branch. A new slice branch starts
- * from the run branch's current tip; an existing one (e.g. after its worktree was removed) is reused.
+ * from `from`: the run branch's current tip, or with a PR per slice, the base branch's. An
+ * existing one (e.g. after its worktree was removed) is reused.
  */
-export function createSliceWorktree(root: string, run: RunRef, sliceId: string): SliceWorktree {
+export function createSliceWorktree(root: string, run: RunRef, sliceId: string, from = run.branch): SliceWorktree {
   const branch = sliceBranch(run.branch, sliceId);
   const path = worktreePath(root, run.id, sliceId);
   const existing = findEntry(root, path);
@@ -140,11 +141,13 @@ export function createSliceWorktree(root: string, run: RunRef, sliceId: string):
     return toSlice(existing, sliceId);
   }
   if (existsSync(path)) throw new GenieError(`${path} exists but isn't a git worktree; remove it first`);
-  if (!branchExists(root, run.branch)) throw new GenieError(`run branch ${run.branch} doesn't exist`);
+  if (!git(root, ['rev-parse', '--verify', '--quiet', from]).ok) {
+    throw new GenieError(from === run.branch ? `run branch ${run.branch} doesn't exist` : `${from} doesn't exist`);
+  }
 
   const args = branchExists(root, branch)
     ? ['worktree', 'add', path, branch]
-    : ['worktree', 'add', '-b', branch, path, run.branch];
+    : ['worktree', 'add', '-b', branch, path, from];
   gitOrThrow(root, args, `creating worktree for slice ${sliceId}`);
   const created = findEntry(root, path);
   if (!created) throw new GenieError(`worktree for slice ${sliceId} wasn't registered`);
@@ -211,6 +214,11 @@ export function mergeSlice(root: string, run: RunRef, sliceId: string, message?:
 export interface RemoveOptions {
   /** Discard uncommitted changes and unmerged commits. */
   force?: boolean;
+  /**
+   * The slices' work has landed some other way (their PRs merged into the base), so their branches
+   * needn't be merged into the run branch. Uncommitted changes still refuse without `force`.
+   */
+  landed?: boolean;
 }
 
 /**
@@ -227,7 +235,7 @@ export function removeSliceWorktree(root: string, run: RunRef, sliceId: string, 
     if (entry && isDirty(entry.path)) {
       throw new GenieError(`slice ${sliceId} has uncommitted changes in ${entry.path} (use force to discard)`);
     }
-    if (hasBranch && !isAncestor(root, branch, run.branch)) {
+    if (hasBranch && !opts.landed && !isAncestor(root, branch, run.branch)) {
       throw new GenieError(`slice branch ${branch} has commits not merged into ${run.branch} (use force to discard)`);
     }
   }
@@ -258,7 +266,7 @@ export function pruneRunWorktrees(root: string, run: RunRef, opts: RemoveOptions
       const entry = findEntry(root, worktreePath(root, run.id, slice));
       const branch = sliceBranch(run.branch, slice);
       if (entry && isDirty(entry.path)) throw new GenieError(`slice ${slice} has uncommitted changes in ${entry.path}`);
-      if (branchExists(root, branch) && !isAncestor(root, branch, run.branch)) {
+      if (branchExists(root, branch) && !opts.landed && !isAncestor(root, branch, run.branch)) {
         throw new GenieError(`slice branch ${branch} has commits not merged into ${run.branch}`);
       }
     }

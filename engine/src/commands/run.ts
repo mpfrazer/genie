@@ -2,15 +2,16 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { GenieError } from '../errors.ts';
-import { abort, advance, completeWork, gateConfig, nextAction, nextActions, type Action, type Ctx } from '../engine.ts';
-import { STAGE_DEFS, STAGES, isSliceGate, type GateName, type RunGateName, type StageName } from '../pipeline.ts';
+import { abort, advance, completeWork, gateConfig, landsOn, nextAction, nextActions, stageDef, type Action, type Ctx } from '../engine.ts';
+import { STAGES, isSliceGate, type GateName, type RunGateName, type StageName } from '../pipeline.ts';
 import { loadPlan } from '../plan.ts';
-import { findSlice, newRunState, type RunState } from '../state.ts';
+import { findSlice, newRunState, type RunState, type SliceState } from '../state.ts';
 import type { Mode } from '../config/types.ts';
 import { commitRun, currentRunId, loadRun, readLog, runDir, setCurrentRun, writeAtomic, type LogEvent } from '../store.ts';
 import { mutateRun, type Session } from '../session.ts';
 import { redeemGrant } from '../grants.ts';
 import { cleanUpAborted, dispatchWorktrees, settle } from '../orchestrate.ts';
+import { findPullRequest } from '../forge.ts';
 
 export interface RunView {
   state: RunState;
@@ -80,7 +81,10 @@ export interface Feedback {
   evidence?: string[];
 }
 
-/** Orchestrated mode: where a slice's work happens. `base` is the run branch it merges onto. */
+/**
+ * Orchestrated mode: where a slice's work happens. `base` is what it merges onto: the run branch,
+ * or with a PR per slice, the base branch on origin (`origin/<base>`).
+ */
 export interface WorktreeView {
   path: string;
   branch: string;
@@ -97,7 +101,7 @@ export interface ActionView {
 
 /** Everything an agent needs to perform the next step, as printed by `genie next --json`. */
 export interface NextView extends ActionView {
-  run: Pick<RunState, 'id' | 'title' | 'mode' | 'status' | 'stage' | 'branch' | 'base'> & { dir: string };
+  run: Pick<RunState, 'id' | 'title' | 'mode' | 'status' | 'stage' | 'branch' | 'base' | 'delivery' | 'since'> & { dir: string };
   /**
    * Every action that can be taken now, in plan order; `action` is the first. More than one only
    * in the implement stage, when several slices are ready.
@@ -110,9 +114,10 @@ export interface NextView extends ActionView {
 }
 
 function verdictBefore(log: LogEvent[], index: number, gate: GateName, slice?: string): Feedback | undefined {
+  // A slice's own gates match on the slice; a run-level verdict also explains the fix-up slice it created.
   const verdict = log
     .slice(0, index)
-    .findLast((e) => e.type === 'gate.verdict' && e.gate === gate && (!isSliceGate(gate) || e.slice === slice));
+    .findLast((e) => e.type === 'gate.verdict' && e.gate === gate && (e.slice === slice || (!isSliceGate(gate) && e.slice === undefined)));
   if (!verdict?.gate) return undefined;
   return {
     gate: verdict.gate,
@@ -149,7 +154,8 @@ export function next(session: Session, id?: string): NextView {
   if (state.mode === 'orchestrated') {
     state = mutateRun(session, state.id, (s, ctx) => dispatchWorktrees(session.root, s, session.config, ctx)).state;
   }
-  const { title, mode, status: runStatus, stage, branch, base } = state;
+  const { title, mode, status: runStatus, stage, branch, base, delivery, since } = state;
+  const onto = delivery === 'slice' ? `origin/${base}` : branch;
   const actions = nextActions(state, session.config).map((action): ActionView => {
     const slice = 'slice' in action ? action.slice?.id : undefined;
     const feedback = action.type === 'work' ? reworkFeedback(state, log, slice) : undefined;
@@ -157,11 +163,11 @@ export function next(session: Session, id?: string): NextView {
     return {
       action,
       ...(feedback ? { feedback } : {}),
-      ...(wt ? { worktree: { path: wt.path, branch: wt.branch, base: state.branch } } : {}),
+      ...(wt ? { worktree: { path: wt.path, branch: wt.branch, base: onto } } : {}),
     };
   });
   return {
-    run: { id: state.id, title, mode, status: runStatus, stage, branch, base, dir },
+    run: { id: state.id, title, mode, status: runStatus, stage, branch, base, ...(delivery ? { delivery } : {}), ...(since ? { since } : {}), dir },
     ...actions[0]!,
     actions,
     parallel: session.config.mode.max_parallel_slices,
@@ -174,14 +180,34 @@ function git(root: string, args: string[]): string | undefined {
   return res.status === 0 ? res.stdout.trim() : undefined;
 }
 
-/** A slice worked in its own worktree must be committed there, on its branch, ahead of the run branch. */
+/** A slice worked in its own worktree must be committed there, on its branch, ahead of where it lands. */
 function checkSliceBranch(root: string, state: RunState, slice: string, wt: { path: string; branch: string }): void {
   const dirty = git(wt.path, ['status', '--porcelain']);
   if (dirty === undefined) throw new GenieError(`slice ${slice}'s worktree ${wt.path} is missing or not a git checkout`);
   if (dirty !== '') throw new GenieError(`slice ${slice} has uncommitted changes in ${wt.path}; commit them first`);
-  if (git(root, ['rev-list', '--count', `${state.branch}..${wt.branch}`]) === '0') {
-    throw new GenieError(`${wt.branch} has no commits ahead of ${state.branch}; commit slice ${slice}'s work in ${wt.path} first`);
+  const onto = state.delivery === 'slice' ? `origin/${state.base}` : state.branch;
+  if (git(root, ['rev-list', '--count', `${onto}..${wt.branch}`]) === '0') {
+    throw new GenieError(`${wt.branch} has no commits ahead of ${onto}; commit slice ${slice}'s work in ${wt.path} first`);
   }
+}
+
+/**
+ * With a PR per slice: the slice's branch is pushed as it stands, and its PR into the base is
+ * open. Returns the PR, for the engine to record.
+ */
+function checkSlicePr(root: string, state: RunState, slice: SliceState): { number: number; url: string } {
+  const id = slice.def.id;
+  const wt = slice.worktree;
+  if (!wt) throw new GenieError(`slice ${id} has no worktree or branch to open a PR from`);
+  checkSliceBranch(root, state, id, wt);
+  const local = git(root, ['rev-parse', wt.branch]);
+  const remote = git(root, ['ls-remote', 'origin', `refs/heads/${wt.branch}`])?.split(/\s/)[0];
+  if (!remote) throw new GenieError(`${wt.branch} isn't on origin yet; push it first`);
+  if (remote !== local) throw new GenieError(`origin's ${wt.branch} differs from the local branch; push slice ${id}'s latest commits first`);
+  const pr = findPullRequest(root, wt.branch);
+  if (!pr || pr.state !== 'OPEN') throw new GenieError(`no open pull request for ${wt.branch}; open one into ${state.base} first`);
+  if (pr.baseRefName !== state.base) throw new GenieError(`${pr.url} targets ${pr.baseRefName}, not ${state.base}; change its base first`);
+  return { number: pr.number, url: pr.url };
 }
 
 /** Work that must live on the run branch has to be committed there, ahead of the base branch. */
@@ -206,13 +232,22 @@ export function done(session: Session, stage: string, by: string, id?: string, s
   if (!STAGES.includes(stage as StageName)) {
     throw new GenieError(`unknown stage "${stage}" (expected one of: ${STAGES.join(', ')})`);
   }
-  if (slice && stage !== 'implement') throw new GenieError('--slice only applies to the implement stage');
+  if (slice && stage !== 'implement' && stage !== 'pr') throw new GenieError('--slice only applies to the implement and pr stages');
   const { state } = mutateRun(session, id, (s, ctx) => {
+    // With a PR per slice, `done pr --slice` reports a slice's PR open while the run implements.
+    if (stage === 'pr' && s.delivery === 'slice' && s.stage === 'implement') {
+      const waiting = s.slices.filter((sl) => sl.phase === 'pr');
+      const target = slice ? findSlice(s, slice) : waiting.length === 1 ? waiting[0] : undefined;
+      const pr = target?.phase === 'pr' ? checkSlicePr(session.root, s, target) : undefined;
+      completeWork(s, session.config, 'pr', by, () => true, ctx, { slice: slice ?? target?.def.id, pr });
+      return;
+    }
+    if (slice && stage !== 'implement') throw new GenieError('--slice only applies to the pr stage when the run opens a PR per slice');
     const inProgress = s.stage === stage && s.stages[stage].phase === 'work';
     const working = stage === 'implement' ? s.slices.filter((sl) => sl.phase === 'work') : [];
     const target = slice ? findSlice(s, slice) : working.length === 1 ? working[0] : undefined;
     if (inProgress && target?.worktree) checkSliceBranch(session.root, s, target.def.id, target.worktree);
-    else if (inProgress && STAGE_DEFS[stage].onRunBranch) checkRunBranch(session.root, s);
+    else if (inProgress && stageDef(s, stage as StageName).onRunBranch) checkRunBranch(session.root, s);
     const dir = runDir(session.root, s.id);
     // The plan is validated (and snapshotted into the run) only once its stage's work is claimed done.
     const plan = inProgress && stage === 'decompose' ? loadPlan(join(dir, 'plan.yaml'), join(dir, 'spec.md')).slices : undefined;
@@ -243,6 +278,9 @@ export function abortRun(session: Session, reason: string | undefined, id?: stri
 export function setMode(session: Session, mode: Mode, id?: string): RunView {
   const { state } = mutateRun(session, id, (s, ctx) => {
     if (s.mode === mode) return;
+    if (mode === 'guided' && s.delivery === 'slice' && s.stage === 'implement') {
+      throw new GenieError(`run ${s.id} opens a PR per slice, which needs orchestrated mode until every slice has merged into ${landsOn(s)}`);
+    }
     // The model can switch modes, so a switch must never hand a decision waiting on a human to an agent.
     const after = { ...s, mode };
     for (const action of nextActions(s, session.config)) {

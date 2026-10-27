@@ -89,6 +89,12 @@ function checkSemantics(config: Config): void {
   if (config.stages.deploy.enabled && !config.deploy.command) {
     throw new GenieError('stages.deploy is enabled but deploy.command is not set (set it, or disable stages.deploy)');
   }
+  if (config.forge.pr_per === 'slice') {
+    // Each slice's PR is opened and merged as part of implement, so both stages have to be on.
+    const off = (['pr', 'merge'] as const).filter((stage) => !config.stages[stage].enabled);
+    if (off.length > 0) throw new GenieError(`forge.pr_per: slice opens and merges a PR per slice, but stages.${off.join(' and stages.')} ${off.length === 1 ? 'is' : 'are'} disabled`);
+    if (config.forge.provider !== 'github') throw new GenieError(`forge.pr_per: slice needs forge.provider: github (it is ${config.forge.provider})`);
+  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

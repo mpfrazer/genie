@@ -35,6 +35,11 @@ export interface Config {
     pr_draft_until?: GateName;
     /** Waits for the run branch's CI and exits non-zero if it fails; evaluated by pr.ready. */
     ci_command?: string;
+    /**
+     * `run`: the slices land on the run branch, which becomes one PR. `slice`: in orchestrated
+     * mode, each slice gets its own PR into the base branch, checked, approved, and merged on its own.
+     */
+    pr_per: 'run' | 'slice';
   };
   stages: Record<StageName, { enabled: boolean }>;
   gates: Record<GateName, GateConfig>;

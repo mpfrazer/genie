@@ -67,6 +67,7 @@ export function init(opts: InitOptions): InitResult {
     '# genie configuration. Layers merge: plugin defaults < profile < ~/.genie/config.yaml < this file.',
     `# Profile "${profile}" presets: ${describeProfile(presets, profileDeploys)}`,
     '# Override any gate under `gates:`, e.g.  gates: { intent.reviewed: { enabled: false } }',
+    '# Orchestrated runs open one PR for the run; for a PR per slice, set  forge: { pr_per: slice }',
     '',
   ].join('\n');
   // Literal blocks keep multi-line commands (like forge.ci_command) readable and editable as written.
