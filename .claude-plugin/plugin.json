@@ -1,6 +1,6 @@
 {
   "name": "genie",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "A consistent, gated development lifecycle for every repo: guided or fully orchestrated, from spec to release.",
   "author": {
     "name": "Mike Frazer"

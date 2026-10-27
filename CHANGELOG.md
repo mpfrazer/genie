@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/mpfrazer/genie/compare/v0.7.0...v0.8.0) (2026-10-27)
+
+
+### Features
+
+* optionally open a PR per slice in orchestrated runs ([#23](https://github.com/mpfrazer/genie/issues/23)) ([d19c0ad](https://github.com/mpfrazer/genie/commit/d19c0add918a9525ee64c6721674c93b46604510))
+
 ## [0.7.0](https://github.com/mpfrazer/genie/compare/v0.6.0...v0.7.0) (2026-10-23)
 
 
