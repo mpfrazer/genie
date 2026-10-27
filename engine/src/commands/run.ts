@@ -17,10 +17,24 @@ export interface RunView {
   state: RunState;
   action: Action;
   dir: string;
+  /** Slices back at work after a failed gate or a merge conflict, by id: why each was sent back. */
+  rework?: Record<string, Feedback>;
 }
 
-function view(session: Session, state: RunState): RunView {
-  return { state, action: nextAction(state, session.config), dir: runDir(session.root, state.id) };
+export function view(session: Session, state: RunState): RunView {
+  const log = readLog(session.root, state.id);
+  const rework = Object.fromEntries(
+    state.slices.flatMap((s) => {
+      const feedback = reworkFeedback(state, log, s.def.id);
+      return feedback ? [[s.def.id, feedback]] : [];
+    }),
+  );
+  return {
+    state,
+    action: nextAction(state, session.config),
+    dir: runDir(session.root, state.id),
+    ...(Object.keys(rework).length > 0 ? { rework } : {}),
+  };
 }
 
 export function slugify(text: string): string {
