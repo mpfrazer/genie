@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/mpfrazer/genie/compare/v0.8.0...v0.8.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* say why a slice went back to work in status and approve output ([#25](https://github.com/mpfrazer/genie/issues/25)) ([aa465d3](https://github.com/mpfrazer/genie/commit/aa465d3eb0321ff29b68c8a18444f9e81abeca93))
+
 ## [0.8.0](https://github.com/mpfrazer/genie/compare/v0.7.0...v0.8.0) (2026-10-27)
 
 
