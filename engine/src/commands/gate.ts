@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { GenieError } from '../errors.ts';
 import { runChecks, type CheckResult } from '../checks.ts';
-import { advance, currentGate, gateConfig, isPerSliceGate, nextAction, recordVerdict, resolveVerdictSlice } from '../engine.ts';
+import { advance, currentGate, gateConfig, isPerSliceGate, recordVerdict, resolveVerdictSlice } from '../engine.ts';
 import { GATES, type GateName } from '../pipeline.ts';
 import type { Config } from '../config/types.ts';
 import { findSlice, sliceGate, type GateState, type RunState, type Verdict } from '../state.ts';
@@ -12,7 +12,7 @@ import { TamperError } from '../seal.ts';
 import { extendBudget } from '../budget.ts';
 import { configDiff, mutateRun, type Session } from '../session.ts';
 import { settle } from '../orchestrate.ts';
-import type { RunView } from './run.ts';
+import { view as runView, type RunView } from './run.ts';
 
 function parseGate(name: string): GateName {
   if (!GATES.includes(name as GateName)) {
@@ -78,9 +78,7 @@ export function runGate(
   );
   const state = settle(session, recorded);
   return {
-    state,
-    action: nextAction(state, config),
-    dir: runDir(session.root, state.id),
+    ...runView(session, state),
     results: outcome.results,
     verdict: outcome.verdict,
   };
@@ -195,8 +193,4 @@ function approveBudget(session: Session, reject: boolean, note?: string, id?: st
   if (slice) throw new GenieError('the budget belongs to the run; --slice does not apply');
   const { state } = mutateRun(session, id, (s, ctx) => extendBudget(s, session.config, note, ctx));
   return runView(session, settle(session, state));
-}
-
-function runView(session: Session, state: RunState): RunView {
-  return { state, action: nextAction(state, session.config), dir: runDir(session.root, state.id) };
 }

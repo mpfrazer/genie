@@ -97,6 +97,7 @@ function ok(root: string, args: string[], cwd = root) {
 }
 
 const nextJson = (root: string) => JSON.parse(ok(root, ['next', '--json']));
+const statusJson = (root: string) => JSON.parse(ok(root, ['status', '--json']));
 
 /** The actions `next` offers, as `<slice>:<work stage or gate>`. */
 const offered = (root: string) =>
@@ -220,16 +221,20 @@ describe('a PR per slice (forge.pr_per: slice)', () => {
     assert.equal(readFileSync(join(w3.path, 'shared.txt'), 'utf8'), 'one\n');
 
     // S2's PR now conflicts with main: back to its implementer, and its PR is checked and approved again.
-    ok(root, ['approve', 'pr.approved', '--slice', 'S2']);
+    // The approval itself says so, as does status, until the slice's work is done again.
+    const conflictNote = /S2 +work .*\n +PR https:\/\/github\.test\/pr\/2\n +reworking after a merge conflict: merge conflict onto main in shared\.txt\n/;
+    assert.match(ok(root, ['approve', 'pr.approved', '--slice', 'S2']), conflictNote);
+    assert.equal(statusJson(root).rework.S2.conflict[0], 'shared.txt');
     view = nextJson(root);
     assert.deepEqual(offered(root), ['S2:implement', 'S3:implement']);
     assert.deepEqual(view.feedback.conflict, ['shared.txt']);
     assert.match(ok(root, ['next']), /Reworking after a merge conflict: merge conflict onto main in shared\.txt/);
     assert.match(ok(root, ['status']), /S2 +work +slice\.verified:pending  slice\.reviewed:pending  pr\.ready:pending  intent\.reviewed:pending  pr\.approved:pending/);
+    assert.match(ok(root, ['status']), conflictNote);
     sh(w2.path, ['git', 'fetch', '-q', 'origin']);
     spawnSync('git', ['merge', 'origin/main'], { cwd: w2.path });
     commit(w2.path, 'shared.txt', 'one\ntwo\n', 'merge main');
-    ok(root, ['done', 'implement', '--slice', 'S2', '--by', 'implementer']);
+    assert.doesNotMatch(ok(root, ['done', 'implement', '--slice', 'S2', '--by', 'implementer']), /reworking/);
     ok(root, ['gate', 'slice.verified', '--slice', 'S2', '--run']);
     agentVerdict(root, dir, 'slice.reviewed', 'adversarial-reviewer', 'pass', 'S2');
     openPr(root, dir, 'S2', w2);

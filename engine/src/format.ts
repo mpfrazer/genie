@@ -4,6 +4,7 @@ import type { Config } from './config/types.ts';
 import { describeBudget } from './budget.ts';
 import { findSlice, type GateState, type RunState, type SlicePhase, type StagePhase } from './state.ts';
 import type { CheckResult } from './checks.ts';
+import type { Feedback } from './commands/run.ts';
 
 const PHASE_MARK: Record<StagePhase, string> = {
   pending: '·',
@@ -13,6 +14,12 @@ const PHASE_MARK: Record<StagePhase, string> = {
   passed: '✓',
   skipped: '–',
 };
+
+/** Why work was sent back: a failed gate (with its note) or a merge conflict. */
+export function describeRework(feedback: Feedback): string {
+  const cause = feedback.conflict ? 'a merge conflict' : `${feedback.gate} failed`;
+  return `${cause}${feedback.note ? `: ${feedback.note}` : ''}`;
+}
 
 /** One line telling the reader what happens next, including the command to run. */
 export function describeAction(action: Action): string {
@@ -46,7 +53,7 @@ export function describeAction(action: Action): string {
   }
 }
 
-export function describeRun(state: RunState, config: Config, action: Action, dir: string): string {
+export function describeRun(state: RunState, config: Config, action: Action, dir: string, rework: Record<string, Feedback> = {}): string {
   const lines = [`${state.id}  [${state.status}, ${state.mode}]`, `  ${state.title}`, `  ${dir}`, ''];
   for (const stage of STAGES) {
     const ss = state.stages[stage];
@@ -59,7 +66,7 @@ export function describeRun(state: RunState, config: Config, action: Action, dir
       })
       .join('  ');
     lines.push(`  ${PHASE_MARK[ss.phase]} ${stage.padEnd(10)} ${(current ? ss.phase : '').padEnd(6)} ${gates}`);
-    if (stage === 'implement') lines.push(...describeSlices(state, config));
+    if (stage === 'implement') lines.push(...describeSlices(state, config, rework));
   }
   const budget = describeBudget(state, config);
   if (budget) lines.push('', `  ${budget}`);
@@ -71,9 +78,9 @@ const SLICE_MARK: Record<SlicePhase, string> = { work: '▶', exit: '▶', pr: '
 
 /**
  * One line per slice under the implement stage: progress and its gates. With a PR per slice, the
- * delivery gates follow on the same line, and the PR on the next.
+ * delivery gates follow on the same line, and the PR on the next. A slice sent back to work says why.
  */
-function describeSlices(state: RunState, config: Config): string[] {
+function describeSlices(state: RunState, config: Config, rework: Record<string, Feedback>): string[] {
   return state.slices.flatMap((slice) => {
     const deps = slice.def.depends_on.filter((d) => findSlice(state, d)?.phase !== 'passed');
     const phase = slice.phase === 'passed' ? '' : deps.length > 0 ? `waits:${deps.join(',')}` : slice.phase;
@@ -85,7 +92,12 @@ function describeSlices(state: RunState, config: Config): string[] {
     }).join('  ');
     const mark = deps.length > 0 ? '·' : SLICE_MARK[slice.phase];
     const line = `      ${mark} ${slice.def.id.padEnd(4)} ${phase.padEnd(10)} ${gates}  ${slice.def.title}`;
-    return slice.pr ? [line, `             PR ${slice.pr.url}${slice.phase === 'passed' ? ' (merged)' : ''}`] : [line];
+    const why = rework[slice.def.id];
+    return [
+      line,
+      ...(slice.pr ? [`             PR ${slice.pr.url}${slice.phase === 'passed' ? ' (merged)' : ''}`] : []),
+      ...(why ? [`             reworking after ${describeRework(why)}`] : []),
+    ];
   });
 }
 

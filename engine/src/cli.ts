@@ -7,7 +7,7 @@ import { abortRun, done, newRun, next, setMode, status, type RunView } from './c
 import { agentVerdict, approve, runGate } from './commands/gate.ts';
 import { hookOutput, preToolUse, promptExpansion, type PreToolUseInput, type PromptExpansionInput } from './commands/hook.ts';
 import { statusline } from './commands/statusline.ts';
-import { describeAction, describeChecks, describeRun } from './format.ts';
+import { describeAction, describeChecks, describeRework, describeRun } from './format.ts';
 import { loadConfig } from './config/load.ts';
 import { configDiff, openSession } from './session.ts';
 import type { Config, Mode } from './config/types.ts';
@@ -71,7 +71,7 @@ function main(argv: string[]): number {
   const json = opts.json ?? false;
   const id = opts['run-id'];
   const print = (data: unknown, text: string) => console.log(json ? JSON.stringify(data, null, 2) : text);
-  const printRun = (v: RunView, config: Config, extra = '') => print(v, `${extra}${describeRun(v.state, config, v.action, v.dir)}${pending(v)}`);
+  const printRun = (v: RunView, config: Config, extra = '') => print(v, `${extra}${describeRun(v.state, config, v.action, v.dir, v.rework)}${pending(v)}`);
   // Read fresh: approve config clears it within the same command.
   const pending = (v: RunView) => {
     if (v.state.status !== 'active' && v.state.status !== 'halted') return '';
@@ -126,9 +126,8 @@ function main(argv: string[]): number {
       const session = openSession(process.cwd(), undefined, id);
       const v = next(session, id);
       const text = v.actions.map(({ action, feedback, worktree }) => {
-        const cause = feedback?.conflict ? 'a merge conflict' : `${feedback?.gate} failed`;
         const why = feedback
-          ? `Reworking after ${cause}${feedback.note ? `: ${feedback.note}` : ''}${feedback.evidence?.length ? `\n  evidence: ${feedback.evidence.join(', ')}` : ''}\n`
+          ? `Reworking after ${describeRework(feedback)}${feedback.evidence?.length ? `\n  evidence: ${feedback.evidence.join(', ')}` : ''}\n`
           : '';
         const where = worktree ? `\n  worktree: ${worktree.path} (${worktree.branch}, merges onto ${worktree.base})` : '';
         return `${why}${describeAction(action)}${where}`;
