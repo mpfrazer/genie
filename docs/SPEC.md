@@ -300,7 +300,7 @@ The Deploy and Release columns are **stages**; the other columns are gates. `gen
 
 | Primitive | Use in genie |
 |---|---|
-| **Slash commands** | Built: `/genie:init`, `/genie:new <intent>`, `/genie:next` (guided step), `/genie:status`, `/genie:approve <gate>`, `/genie:abort`. The last two are user-only: `disable-model-invocation`, and the hook denies the model running `genie approve` / `genie abort`. Planned: `/genie:run` (orchestrate). |
+| **Slash commands** | Built: `/genie:init`, `/genie:new <intent>`, `/genie:next` (guided step), `/genie:status`, `/genie:approve <gate>`, `/genie:abort`, `/genie:run` (orchestrate). Approve and abort are user-only: `disable-model-invocation`, and the hook denies the model running `genie approve` / `genie abort`. |
 | **Skills** | The stage playbooks (`spec`, `decompose`, `implement`, `review`, `pr`, `release`). They are loaded on demand so each stage gets precise instructions without bloating context. |
 | **Subagents** | `spec-writer`, `decomposer`, `implementer`, `plan-reviewer`, `adversarial-reviewer`, `intent-reviewer`, `integrator`, `release-manager`. Each has scoped tools. Reviewers are read-only. |
 | **Hooks** | Enforcement: `PreToolUse` blocks `git push`, `gh pr merge`, and deploy/release commands without a passing gate. `SessionStart` loads active-run context. `Stop`/`SubagentStop` record stage completion. |
@@ -445,7 +445,7 @@ Verified end to end on 2026-10-22:
 2. It runs up to `parallel` of them in one message, so they run concurrently: implementer and reviewer subagents (each told to work only in its slice's worktree), and automated gates. Stage work done in the main session (spec, decompose, integrate, pr, merge, deploy, release) is only ever one action at a time.
 3. When the batch returns, back to 1. The engine merges finished slices and routes failures and conflicts back between calls.
 
-It stops when only human gates remain (and says what to review), when the run halts, aborts or finishes, or on an error it can't resolve. It doesn't stop when a stage passes or a gate fails: rework is part of the loop. `/genie:next` still works on an orchestrated run, one action at a time, and `genie mode guided` switches back so new slices are worked on the run branch.
+It stops when only human gates remain (and says what to review), when the run halts, aborts or finishes, or on an error it can't resolve. It doesn't stop when a stage passes or a gate fails: rework is part of the loop. After the user's `/genie:approve` (or `--reject`) on an orchestrated run, the command picks the loop back up by itself, so the user doesn't have to type `/genie:run` again. Guided runs, by contrast, remind the user at each stop that `/genie:run` would keep going. `/genie:next` still works on an orchestrated run, one action at a time, and `genie mode guided` switches back so new slices are worked on the run branch.
 
 **A PR per slice.** With `forge.pr_per: slice`, each slice gets its own PR into the base, and the loop opens it once the slice passes its gates (§7). The run doesn't wait for every slice: while one slice's PR waits for the user's `pr.approved`, the others carry on, and the loop stops only when nothing but human decisions is left. Each approval merges that slice's PR, which starts the slices that depend on it.
 
