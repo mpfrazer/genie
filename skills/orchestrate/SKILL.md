@@ -52,7 +52,7 @@ You don't need to do any of this; it's here so you can explain it.
 
 Stop and report when:
 
-- **Only human actions remain** (`await_human`). Tell the user what to review for each: artifact paths in the run dir, the PR URL (`action.slice.pr.url` for a slice's PR), the slice, and the agent's pre-review if `action.agentReview` is present. With a PR per slice, list every PR waiting for approval: approving one merges it. Then give the commands: `/genie:approve <gate> [--slice <id>]`, or the same with `--reject --note "why"`. Say that `/genie:run` carries on afterwards.
+- **Only human actions remain** (`await_human`). Tell the user what to review for each: artifact paths in the run dir, the PR URL (`action.slice.pr.url` for a slice's PR), the slice, and the agent's pre-review if `action.agentReview` is present. With a PR per slice, list every PR waiting for approval: approving one merges it. Then give the commands: `/genie:approve <gate> [--slice <id>]`, or the same with `--reject --note "why"`. Say that the loop carries on by itself after the approval (or rejection), with no need for `/genie:run`.
 - **The run is `over_budget`.** It has used its time or cost budget (`action.reason` says which). Work already running can finish and report, but start nothing new. Tell the user what was spent, and that `/genie:approve budget` grants the configured budget again, or `/genie:abort` stops the run.
 - **The run is `halted`, `aborted`, or `done`.**
 - **`GENIE` returns an error you can't resolve by following its message.** If it's a merge the engine couldn't run (for example, uncommitted changes where the run branch is checked out), report the message: the user has to clear it.

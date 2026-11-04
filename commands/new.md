@@ -18,5 +18,7 @@ Start a new genie run.
    ```
 
    - If genie isn't initialized here, tell the user to run `/genie:init` first.
-   - If a run is already active, show the output of `node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs" status`. Ask whether to continue it (`/genie:next`) or abort it. Never abort a run on your own.
+   - If a run is already active, show the output of `node "${CLAUDE_PLUGIN_ROOT}/engine/dist/genie.mjs" status`. Ask whether to continue it (`/genie:next` one step at a time, or `/genie:run` to loop until it needs them) or abort it. Never abort a run on your own.
 3. Load the `genie:drive` skill and follow it from the top. It drafts the spec and stops when the spec needs the user's approval.
+
+This starts a guided run: each `/genie:next` does one step and stops. For a run that keeps going on its own, the user can start with `/genie:run <intent>` instead, or type `/genie:run` now to switch this one. `mode.default: orchestrated` in `.genie/config.yaml` makes that the default.

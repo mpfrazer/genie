@@ -50,3 +50,5 @@ If an automated gate comes back `needs_human` with "no checks configured", say w
 ## Reporting
 
 End with a short status: the stage, what happened, and what the user does next. Suggest `/genie:status` for the full picture.
+
+The run is in guided mode, so end with one line saying so: `/genie:run` switches it to orchestrated mode, which keeps going on its own (in parallel where slices allow) and stops only when it needs the user.
