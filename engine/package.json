@@ -1,6 +1,6 @@
 {
   "name": "@genie/engine",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Deterministic pipeline engine for the genie Claude Code plugin",
   "license": "MIT",
   "private": true,
